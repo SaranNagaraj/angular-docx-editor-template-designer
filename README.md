@@ -32,7 +32,7 @@ npm start
 
 The Angular dev server forwards `/api` calls to the backend. The target is in `Client-Side/proxy.conf.json` and must match the backend URL in `Server-Side/src/Properties/launchSettings.json` (both use `http://localhost:62870`). Add your Syncfusion license key in `Server-Side/src/Program.cs`.
 
-Templates are read from `Server-Side/src/wwwroot/Templates`: `Notice of Hearing.docx` is the main template (a built-in sample is used if it is absent), and every other `.docx` is a supporting document.
+The editor always starts from a template created from scratch (also after **Reset**). Templates are saved to and read from `Server-Side/src/wwwroot/Templates`: **Save Document** creates `Notice of Hearing.docx` there, and you open the saved document again from the Template list. Every other `.docx` in the folder is a supporting document.
 
 ## How Each Requirement Is Achieved
 
@@ -57,8 +57,8 @@ Each flow below shows who does what: **User**, **Client** (the Angular app) and 
 1. **User** opens the page.
 2. **Client** asks the server for the merge field list (`GET /api/schema`).
 3. **Server** returns each field's name, type and label.
-4. **Client** asks for the default template (`GET /api/template`) and the template list (`GET /api/templates`).
-5. **Server** returns the main template and the supporting documents found in the templates folder.
+4. **Client** asks for the starting template (`GET /api/template`) and the template list (`GET /api/templates`).
+5. **Server** builds the template from scratch and returns it, with the name of the file Save writes to. It also returns the saved documents found in the templates folder.
 6. **Client** opens the template in the editor and fills the Merge Fields panel and the document list.
 
 ### 2. Search and select cases
@@ -92,13 +92,12 @@ Each flow below shows who does what: **User**, **Client** (the Angular app) and 
 
 ### 5. Edit and save a template
 
-1. **User** picks a template and clicks **Load**.
-2. **Client** calls `GET /api/templates/{id}`; **Server** returns the template and the editor opens it.
-3. **User** edits the document and inserts merge fields or regions from the left panel. This part runs in the browser only.
-4. **User** clicks **Save Document**.
-5. **Client** sends the document to `POST /api/templates/{id}/save`.
-6. **Server** converts it to DOCX and overwrites the existing file.
-7. **Client** shows a "saved" message.
+1. **User** edits the template created from scratch and inserts merge fields or regions from the left panel. This part runs in the browser only.
+2. **User** clicks **Save Document**. (Before the first save the button is enabled even without edits.)
+3. **Client** sends the document to `POST /api/templates/{id}/save`.
+4. **Server** converts it to DOCX and writes `Notice of Hearing.docx` in the templates folder, creating it on the first save and overwriting it afterwards.
+5. **Client** shows a "saved" message and refreshes the Template list, so the saved document now appears in it.
+6. Later, **User** picks the saved template in the list and clicks **Load**; **Client** calls `GET /api/templates/{id}` and **Server** returns the saved document, which opens in the editor.
 
 Save is disabled when the editor holds merged, previewed or converted content, so a template file cannot be overwritten by mistake.
 
@@ -114,7 +113,7 @@ Save is disabled when the editor holds merged, previewed or converted content, s
 
 1. **User** clicks **Reset**.
 2. **Client** clears the preview state and calls `GET /api/template`.
-3. **Server** returns the default main template.
+3. **Server** builds the template from scratch again (the saved file is not used).
 4. **Client** opens it in the editor, discarding unsaved changes.
 
 ## APIs Used
@@ -122,8 +121,8 @@ Save is disabled when the editor holds merged, previewed or converted content, s
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/api/schema` | GET | Merge field names, types and labels |
-| `/api/template` | GET | Default main template |
-| `/api/templates` | GET | List the main template and supporting documents |
+| `/api/template` | GET | The template created from scratch, plus the file name Save writes to |
+| `/api/templates` | GET | List the saved templates and supporting documents |
 | `/api/templates/{id}` | GET | Load a template |
 | `/api/templates/{id}/save` | POST | Save the edited template |
 | `/api/templates/xsl-to-word` | POST | Convert an XSLT stylesheet to a Word template |
