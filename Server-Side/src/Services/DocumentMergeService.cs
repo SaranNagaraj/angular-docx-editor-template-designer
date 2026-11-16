@@ -352,22 +352,15 @@ namespace EJ2APIServices.Services
         /// is populated in that case so the caller can prompt the user.
         /// </summary>
         public static WordDocument MergeAsDocument(
-            WordDocument mainTemplate,
-            List<CaseData> cases,
-            List<AdditionalMergeValue> additionalData,
-            List<string> supportingDocumentPaths,
-            MergeOutcome outcome)
+             WordDocument mainTemplate,
+             List<CaseData> cases,
+             List<AdditionalMergeValue> additionalData,
+             List<string> supportingDocumentPaths,
+             MergeOutcome outcome)
         {
             // ---- Step 1: combine the main template with the supporting documents ----
             var combined = mainTemplate.Clone();
 
-            // The field names each supporting document contributes, captured BEFORE the
-            // documents are combined. Once combined they are indistinguishable from the
-            // main template's own fields, and the mail merge needs to know which ones
-            // sit OUTSIDE the merge regions (the main template's fields are inside the
-            // «BeginGroup:Case» / «BeginGroup:Parties» regions and are resolved by the
-            // region execution instead).
-            var supportingFieldNames = new List<string>();
             var supportingDocuments = new List<(string Path, WordDocument Doc)>();
 
             if (supportingDocumentPaths != null && supportingDocumentPaths.Count > 0)
@@ -383,11 +376,6 @@ namespace EJ2APIServices.Services
                     var supporting = new WordDocument(path, FormatType.Docx);
                     supportingDocuments.Add((path, supporting));
 
-                    var fields = supporting.MailMerge.GetMergeFieldNames() ?? new string[0];
-                    foreach (var f in fields)
-                    {
-                        if (!string.IsNullOrWhiteSpace(f)) { supportingFieldNames.Add(f); }
-                    }
                 }
 
                 // Import each supporting document at the end of the combined document,
@@ -399,7 +387,7 @@ namespace EJ2APIServices.Services
             }
 
             // ---- Step 2: mail merge the combined document ----
-            RunMergeOnDocument(combined, cases, additionalData, outcome, "combined", supportingFieldNames);
+            RunMergeOnDocument(combined, cases, additionalData, outcome, "combined");
 
             // Close the source supporting documents - their content now lives in the
             // combined document.
@@ -456,8 +444,7 @@ namespace EJ2APIServices.Services
             List<CaseData> cases,
             List<AdditionalMergeValue> additionalData,
             MergeOutcome outcome,
-            string label,
-            List<string> supportingFieldNames = null)
+            string label)
         {
             // ---- Region detection (decides the merge strategy) ----
             var detectedGroups = doc.MailMerge.GetMergeGroupNames() ?? new string[0];
@@ -585,19 +572,8 @@ namespace EJ2APIServices.Services
             else if (hasPartiesRegion)
             {
                 doc.MailMerge.ExecuteGroup(BuildPartyGroupTable(cases));
-                ExecuteCaseLevelFields(doc, cases, detectedFields, additionalData);
             }
-            else
-            {
-                ExecuteCaseLevelFields(doc, cases, detectedFields, additionalData);
-            }
-
-            // Report the supporting-document fields the case data cannot fill as
-            // missing. This runs for EVERY strategy because the supporting documents
-            // are combined into the same document before the merge - their fields
-            // sit outside the main template's merge regions, so the region execution
-            // never touches them.
-            ReportMissingSupportingFields(supportingFieldNames, additionalData, outcome, defaultCaseId, defaultCaseNumber);
+            // Only group / nested-group merge is performed; fields outside a region are not merged.
 
             // New missing fields discovered in this document?
             if (outcome.MissingFields.Count > missingBefore)
@@ -606,114 +582,6 @@ namespace EJ2APIServices.Services
             }
 
             return true;
-        }
-
-        /// <summary>
-        /// Fills case-level merge fields that sit OUTSIDE any region.
-        ///
-        /// Two kinds of fields are handled:
-        ///   - Fields the case data provides (CaseNumber, CaseCaption): filled with
-        ///     the first selected case's values.
-        ///   - Fields the user supplied through the missing-field dialog (for example
-        ///     JudgeName or NoticeDate in a supporting document): filled with the
-        ///     value the user entered.
-        ///
-        /// Only fields actually present in the document are filled. With multiple
-        /// selected cases and no parent Case region there is no per-case repetition;
-        /// the first selected case supplies the values for these top-level fields.
-        /// </summary>
-        private static void ExecuteCaseLevelFields(
-            WordDocument doc,
-            List<CaseData> cases,
-            string[] detectedFields,
-            List<AdditionalMergeValue> additionalData)
-        {
-            if (detectedFields == null || detectedFields.Length == 0)
-            {
-                return;
-            }
-
-            var present = new HashSet<string>(
-                detectedFields.Select(f => f ?? ""),
-                StringComparer.OrdinalIgnoreCase);
-
-            var first = cases.FirstOrDefault();
-            string firstCaseNumber = first?.CaseNumber ?? "";
-            string firstCaseCaption = first?.CaseCaption ?? "";
-
-            var names = new List<string>();
-            var values = new List<string>();
-            if (present.Contains("CaseNumber")) { names.Add("CaseNumber"); values.Add(firstCaseNumber); }
-            if (present.Contains("CaseCaption")) { names.Add("CaseCaption"); values.Add(firstCaseCaption); }
-
-            // Values the user supplied for case-level fields (groupName "Case", row 0).
-            if (additionalData != null)
-            {
-                foreach (var supplied in additionalData)
-                {
-                    if (supplied == null || string.IsNullOrEmpty(supplied.Value)) { continue; }
-                    if (!string.Equals(supplied.GroupName ?? "", CaseRegionName, StringComparison.OrdinalIgnoreCase)) { continue; }
-                    if (supplied.RowIndex != 0) { continue; }
-                    if (!present.Contains(supplied.FieldName ?? "")) { continue; }
-                    if (names.Any(n => string.Equals(n, supplied.FieldName, StringComparison.OrdinalIgnoreCase))) { continue; }
-
-                    names.Add(supplied.FieldName);
-                    values.Add(supplied.Value);
-                }
-            }
-
-            if (names.Count > 0)
-            {
-                doc.MailMerge.Execute(names.ToArray(), values.ToArray());
-            }
-        }
-
-        /// <summary>
-        /// Reports the merge fields contributed by the SUPPORTING documents that the
-        /// case data cannot fill, so the UI prompts the user for them.
-        ///
-        /// The supporting documents are combined into the main document BEFORE the mail
-        /// merge runs, so their fields are part of the merged document but sit outside
-        /// the main template's «BeginGroup:Case» / «BeginGroup:Parties» regions. The
-        /// region execution therefore never resolves them, and they have to be
-        /// detected explicitly. Fields the case data DOES provide (CaseNumber,
-        /// CaseCaption) are filled by ExecuteCaseLevelFields and must not be reported.
-        ///
-        /// A field the user already answered for (present in additionalData) is not
-        /// reported again, so the second pass after the prompt can complete.
-        /// </summary>
-        private static void ReportMissingSupportingFields(
-            List<string> supportingFieldNames,
-            List<AdditionalMergeValue> additionalData,
-            MergeOutcome outcome,
-            int defaultCaseId,
-            string defaultCaseNumber)
-        {
-            if (supportingFieldNames == null || supportingFieldNames.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var fieldName in supportingFieldNames.Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                if (string.IsNullOrWhiteSpace(fieldName)) { continue; }
-                if (fieldName.StartsWith("BeginGroup:", StringComparison.OrdinalIgnoreCase)) { continue; }
-                if (fieldName.StartsWith("EndGroup:", StringComparison.OrdinalIgnoreCase)) { continue; }
-
-                // Fields the case data supplies are filled by ExecuteCaseLevelFields.
-                if (string.Equals(fieldName, "CaseNumber", StringComparison.OrdinalIgnoreCase)) { continue; }
-                if (string.Equals(fieldName, "CaseCaption", StringComparison.OrdinalIgnoreCase)) { continue; }
-
-                // Already answered by the user -> not missing anymore.
-                var supplied = FindSuppliedValue(
-                    additionalData, defaultCaseId, CaseRegionName, 0, fieldName);
-                if (supplied != null && !string.IsNullOrEmpty(supplied.Value))
-                {
-                    continue;
-                }
-
-                AddMissing(outcome, defaultCaseId, defaultCaseNumber, CaseRegionName, 0, fieldName);
-            }
         }
 
         /// <summary>
