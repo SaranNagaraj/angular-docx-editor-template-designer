@@ -58,7 +58,7 @@ namespace EJ2APIServices.Controllers
             {
                 Case = new Dictionary<string, FieldSchemaEntry>
                 {
-                    ["CaseNumber"]  = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Case Number" },
+                    ["CaseNumber"]  = new FieldSchemaEntry { Type = FieldTypes.Number,  Label = "Case Number" },
                     ["CaseCaption"] = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Case Caption" },
                     ["NoticeDate"]  = new FieldSchemaEntry { Type = FieldTypes.Date,    Label = "Notice Date" },
                     ["JudgeName"]   = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Presiding Judge" }
