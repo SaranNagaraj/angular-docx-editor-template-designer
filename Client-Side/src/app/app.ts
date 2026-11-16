@@ -198,6 +198,24 @@ function coerceTypedValue(type: FieldType, value: string): string {
                     <span><strong>Preview mode.</strong> The editor is read-only. Review the assembled document, then click <strong>Generate Document</strong> to finalize or <strong>Back to Edit</strong> to return to the template.</span>
                     <button type="button" class="poc-btn poc-btn-banner" (click)="exitPreview()">Back to Edit</button>
                 </div>
+                <div class="poc-action-toolbar">
+                    <button type="button" class="poc-btn poc-btn-block" (click)="triggerPdfPicker()"
+                        [disabled]="convertingPdf()">
+                        {{ convertingPdf() ? 'Converting...' : 'Open PDF Document' }}
+                    </button>
+                    <button type="button" class="poc-btn poc-btn-block" (click)="save()"
+                        [disabled]="saving() || !editorHoldsTemplate() || !currentDocumentId">
+                        {{ saving() ? 'Saving...' : 'Save Document' }}
+                    </button>
+                    <button type="button" class="poc-btn poc-btn-block" (click)="preview()"
+                        [disabled]="selectedIds().size === 0 || previewing() || generating()">
+                        {{ previewing() ? 'Building Preview...' : 'Preview Document' }}
+                    </button>
+                    <!-- Hidden file input wired to triggerPdfPicker(). Accepts PDF only. -->
+                    <input #pdfFileInput type="file" accept="application/pdf,.pdf"
+                        style="display:none"
+                        (change)="onPdfPicked($event)">
+                </div>
                 <ejs-documenteditorcontainer
                     #container
                     height="100%"
@@ -280,14 +298,6 @@ function coerceTypedValue(type: FieldType, value: string): string {
 
                 <div class="poc-divider"></div>
 
-                <button type="button" class="poc-btn poc-btn-block" (click)="save()"
-                    [disabled]="saving() || !editorHoldsTemplate() || !currentDocumentId">
-                    {{ saving() ? 'Saving...' : 'Save Document' }}
-                </button>
-                <button type="button" class="poc-btn poc-btn-block" (click)="preview()"
-                    [disabled]="selectedIds().size === 0 || previewing() || generating()">
-                    {{ previewing() ? 'Building Preview...' : 'Preview Document' }}
-                </button>
                 <button type="button" class="poc-btn poc-btn-primary poc-btn-block" (click)="generate()"
                     [disabled]="selectedIds().size === 0 || generating()">
                     {{ generating() ? 'Generating...' : 'Generate Document' }}
@@ -404,6 +414,11 @@ export class App implements AfterViewInit, OnDestroy {
     /** True when the editor holds a template that can be saved back to disk. */
     public editorHoldsTemplate = signal(false);
     public saving = signal(false);
+    public convertingPdf = signal(false);
+
+    /** Reference to the hidden <input type="file"> used by the Open PDF Document button. */
+    @ViewChild('pdfFileInput', { static: false })
+    public pdfFileInput?: HTMLInputElement;
 
     /** Selected supporting documents to append after the merge. */
     public selectedAppendedIds = signal<Set<string>>(new Set<string>());
@@ -667,6 +682,76 @@ export class App implements AfterViewInit, OnDestroy {
             this.statusMessage.set(`Could not save '${id}'. Check the service log.`);
         }).finally(() => {
             this.saving.set(false);
+        });
+    }
+
+    // ---------------- Open PDF ----------------
+
+    /**
+     * Opens the hidden file picker bound to the Open PDF Document button.
+     * The picked file is handled by onPdfPicked().
+     */
+    public triggerPdfPicker(): void {
+        if (this.convertingPdf()) { return; }
+        this.pdfFileInput?.click();
+    }
+
+    /**
+     * Handles the file picked from the Open PDF Document file input. Sends the PDF
+     * to the server, which converts it to DOCX and returns the SFDT. The converted
+     * document opens in the editor and is marked as a savable template (the server
+     * saved it to wwwroot/Templates with a sanitized file name).
+     */
+    public onPdfPicked(ev: Event): void {
+        const input = ev.target as HTMLInputElement;
+        const file = input.files && input.files.length > 0 ? input.files[0] : null;
+        // Always reset the input so picking the same file twice in a row still fires.
+        input.value = '';
+
+        if (!file) { return; }
+        if (!file.name.toLowerCase().endsWith('.pdf')) {
+            this.statusMessage.set('Only PDF files are supported.');
+            return;
+        }
+
+        this.convertingPdf.set(true);
+        this.statusMessage.set(`Converting '${file.name}'...`);
+
+        this.api.convertAndSavePdf(file).then(result => {
+            if (this.disposed) { return; }
+            this.openInEditor(result.sfdt);
+            this.currentDocumentId = result.id;
+            this.editorHoldsDefaultTemplate = false;
+            this.editorHoldsTemplate.set(true);
+            this.previewMode.set(false);
+            this.previewedSfdt = null;
+            this.statusMessage.set(`Converted '${file.name}' -> '${result.displayName}'. You can save it back to the templates folder at any time.`);
+            // Refresh the template list so the newly created file shows up in the
+            // template picker.
+            this.refreshTemplates();
+        }).catch((err: unknown) => {
+            let message: string;
+            if (err && typeof err === 'object' && 'error' in err) {
+                const inner = (err as { error?: { message?: string } }).error;
+                message = inner?.message ?? `Could not convert '${file.name}'.`;
+            } else {
+                message = `Could not convert '${file.name}'.`;
+            }
+            this.statusMessage.set(message);
+        }).finally(() => {
+            this.convertingPdf.set(false);
+        });
+    }
+
+    /** Re-fetches GET /api/templates so the picker reflects newly added files. */
+    private refreshTemplates(): void {
+        this.api.listTemplates().then(items => {
+            if (this.disposed) { return; }
+            this.templates.set(items);
+            this.mainTemplateId = items.find(t => t.isMainTemplate)?.id ?? '';
+        }).catch(() => {
+            // Silent failure - the user can still operate; the picker will refresh on
+            // the next page load.
         });
     }
 

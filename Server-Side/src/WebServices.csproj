@@ -25,6 +25,7 @@
     <PackageReference Include="Syncfusion.EJ2.WordEditor.AspNet.Core" Version="*" />
     <PackageReference Include="Syncfusion.EJ2.SpellChecker.AspNet.Core" Version="*" />
     <PackageReference Include="Syncfusion.Licensing" Version="*" />
+    <PackageReference Include="Syncfusion.PdfToDocConverter.Net.Core" Version="*" />
     <PackageReference Include="System.Drawing.Common" Version="4.*" />
   </ItemGroup>
 

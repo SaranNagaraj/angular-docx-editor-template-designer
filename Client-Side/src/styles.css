@@ -281,6 +281,23 @@
     font-size: 0.8125rem;
 }
 
+/* Action toolbar above the editor: Open PDF / Save / Preview */
+.poc-action-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f9fafb;
+    border-bottom: 1px solid #e5e7eb;
+    flex-wrap: wrap;
+}
+
+.poc-action-toolbar .poc-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 6px 14px;
+}
+
 .poc-preview-banner span {
     flex: 1;
     min-width: 0;

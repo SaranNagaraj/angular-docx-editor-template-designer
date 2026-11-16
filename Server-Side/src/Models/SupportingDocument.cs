@@ -62,5 +62,14 @@ namespace EJ2APIServices.Models
         /// <summary>Absolute path of the written file (server-side detail).</summary>
         [JsonPropertyName("path")]
         public string Path { get; set; }
+
+        /// <summary>
+        /// Optional: the SFDT representation of the saved document, returned by
+        /// some endpoints (e.g. /api/pdf/convert-and-save) so the client can
+        /// load the freshly converted document into the editor without a second
+        /// round trip.
+        /// </summary>
+        [JsonPropertyName("sfdt")]
+        public string Sfdt { get; set; }
     }
 }
