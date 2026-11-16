@@ -91,6 +91,71 @@ namespace EJ2APIServices.Services
         }
 
         /// <summary>
+        /// Loads a DOCX file from disk and returns its SFDT representation so the editor
+        /// can open it directly.
+        /// </summary>
+        public static string LoadDocxAsSfdt(string docxPath)
+        {
+            using (var doc = new WordDocument(docxPath, FormatType.Docx))
+            {
+                return ToSfdt(doc);
+            }
+        }
+
+        /// <summary>
+        /// Loads a DOCX file from disk into a DocIO WordDocument ready to be appended.
+        /// </summary>
+        public static WordDocument LoadDocx(string docxPath)
+        {
+            return new WordDocument(docxPath, FormatType.Docx);
+        }
+
+        /// <summary>
+        /// Converts the editor's SFDT payload back to a DOCX file and writes it to disk.
+        /// This is the inverse of LoadTemplateFromSfdt: the editor serializes the
+        /// document the user is editing as SFDT, and the server persists it as the
+        /// DOCX template in the templates folder.
+        ///
+        /// The write is atomic: the DOCX is first produced in a temporary file next to
+        /// the target and only then moved over it, so a failure part-way through never
+        /// leaves a truncated template behind.
+        /// </summary>
+        public static void SaveSfdtAsDocx(string sfdt, string docxPath)
+        {
+            var directory = Path.GetDirectoryName(docxPath);
+            var tempPath = Path.Combine(directory ?? string.Empty, Path.GetFileName(docxPath) + ".tmp");
+
+            try
+            {
+                WordDocument raw = EJ2WordDocument.Save(sfdt);
+                using (var ms = new MemoryStream())
+                {
+                    raw.Save(ms, FormatType.Docx);
+                    raw.Close();
+                    ms.Position = 0;
+
+                    using (var doc = new WordDocument(ms, FormatType.Docx))
+                    {
+                        doc.Save(tempPath, FormatType.Docx);
+                    }
+                }
+
+                if (File.Exists(tempPath))
+                {
+                    // File.Move with overwrite keeps the swap atomic on the same volume.
+                    File.Move(tempPath, docxPath, true);
+                }
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); } catch { /* best effort cleanup */ }
+                }
+            }
+        }
+
+        /// <summary>
         /// Builds the bundled sample Notice of Hearing template. Used on application start
         /// so the editor never opens blank, and as the fallback when no SFDT is sent.
         ///
@@ -265,42 +330,135 @@ namespace EJ2APIServices.Services
             return dt;
         }
 
+
         /// <summary>
-        /// Runs the mail merge over the selected cases (one merged document) and returns
-        /// either the missing fields to prompt for, or the merged document as SFDT.
+        /// Builds the consolidated document and runs the mail merge over it.
         ///
-        /// Region detection decides the merge strategy before anything is executed:
+        /// ORDER OF OPERATIONS (important):
+        ///   1. COMBINE first: the main template and every selected supporting
+        ///      document are merged into ONE document using DocIO's ImportContent
+        ///      (canonical pattern from
+        ///      https://help.syncfusion.com/document-processing/word/word-library/net/word-document/merging-word-documents#merging-documents-in-a-new-page).
+        ///      Each supporting document starts on a new page.
+        ///   2. Then the mail merge runs ONCE over that combined document.
         ///
-        ///   Scenario A (standard regions): the template has «BeginGroup:Parties» but no
-        ///   parent «BeginGroup:Case» region. Detected groups: [Parties]. Strategy:
-        ///   MailMerge.ExecuteGroup(partyTable) repeats the region per party row
-        ///   (Pattern 1), and MailMerge.Execute(...) fills the case fields outside
-        ///   the region. No parent Case region is required.
+        /// Because the merge runs over the combined document, DocIO resolves the
+        /// merge fields of the main template AND the supporting documents in the
+        /// same pass. Any field the case data cannot fill - in either document -
+        /// is reported back so the UI can prompt the user for it.
         ///
-        ///   Scenario B (nested regions): the template wraps «BeginGroup:Parties» inside
-        ///   «BeginGroup:Case». Detected groups: [Case, Parties]. Strategy: the existing
-        ///   relational MailMerge.ExecuteNestedGroup(dataSet, commands) with parent-child
-        ///   resolution (Pattern 2 / Requirement 5) - unchanged.
-        ///
-        /// Exact code path:
-        ///   1. Region discovery:  doc.MailMerge.GetMergeGroupNames() / GetMergeFieldNames()
-        ///      (logged so manually inserted regions can be verified).
-        ///   2. Data mapping:     BuildPartyGroupTable() for the standard path;
-        ///                        BuildNestedDataSet()/BuildNestedCommands() for the nested path.
-        ///   3. Mail merge:       ExecuteGroup(...) or ExecuteNestedGroup(...) per scenario.
-        ///   4. Missing detection: BeforeClearField fires for every field DocIO could not
-        ///      fill. MergeField events track which case row is current (nested path) so
-        ///      each missing field is tagged with its CaseId/CaseNumber. AdditionalMergeData
-        ///      values are injected through the same event in both paths.
+        /// Returns the merged WordDocument; the CALLER owns it and must Close() it.
+        /// Returns null when the merge produced missing fields - the shared outcome
+        /// is populated in that case so the caller can prompt the user.
+        /// </summary>
+        public static WordDocument MergeAsDocument(
+            WordDocument mainTemplate,
+            List<CaseData> cases,
+            List<AdditionalMergeValue> additionalData,
+            List<string> supportingDocumentPaths,
+            MergeOutcome outcome)
+        {
+            // ---- Step 1: combine the main template with the supporting documents ----
+            var combined = mainTemplate.Clone();
+
+            // The field names each supporting document contributes, captured BEFORE the
+            // documents are combined. Once combined they are indistinguishable from the
+            // main template's own fields, and the mail merge needs to know which ones
+            // sit OUTSIDE the merge regions (the main template's fields are inside the
+            // «BeginGroup:Case» / «BeginGroup:Parties» regions and are resolved by the
+            // region execution instead).
+            var supportingFieldNames = new List<string>();
+            var supportingDocuments = new List<(string Path, WordDocument Doc)>();
+
+            if (supportingDocumentPaths != null && supportingDocumentPaths.Count > 0)
+            {
+                foreach (var path in supportingDocumentPaths)
+                {
+                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    {
+                        Console.WriteLine($"[merge] skipping missing supporting document: {path}");
+                        continue;
+                    }
+
+                    var supporting = new WordDocument(path, FormatType.Docx);
+                    supportingDocuments.Add((path, supporting));
+
+                    var fields = supporting.MailMerge.GetMergeFieldNames() ?? new string[0];
+                    foreach (var f in fields)
+                    {
+                        if (!string.IsNullOrWhiteSpace(f)) { supportingFieldNames.Add(f); }
+                    }
+                }
+
+                // Import each supporting document at the end of the combined document,
+                // starting on a new page.
+                foreach (var (path, supporting) in supportingDocuments)
+                {
+                    ImportSupportingDocument(combined, supporting, Path.GetFileName(path));
+                }
+            }
+
+            // ---- Step 2: mail merge the combined document ----
+            RunMergeOnDocument(combined, cases, additionalData, outcome, "combined", supportingFieldNames);
+
+            // Close the source supporting documents - their content now lives in the
+            // combined document.
+            foreach (var (_, supporting) in supportingDocuments)
+            {
+                supporting.Close();
+            }
+
+            if (outcome.MissingFields.Count > 0)
+            {
+                combined.Close();
+                return null;
+            }
+
+            return combined;
+        }
+
+        /// <summary>
+        /// Merges the main template with the selected supporting documents, runs the
+        /// mail merge over the combined document, and returns the result as SFDT for
+        /// the editor. When fields are missing the outcome carries them and
+        /// MergedSfdt stays null so the caller can prompt the user.
         /// </summary>
         public static MergeOutcome Merge(
-            WordDocument template,
+            WordDocument mainTemplate,
             List<CaseData> cases,
-            List<AdditionalMergeValue> additionalData)
+            List<AdditionalMergeValue> additionalData,
+            List<string> supportingDocumentPaths = null)
         {
-            var doc = template.Clone();
             var outcome = new MergeOutcome();
+            var combined = MergeAsDocument(mainTemplate, cases, additionalData, supportingDocumentPaths, outcome);
+            if (combined == null)
+            {
+                return outcome; // missing fields; nothing to serialise
+            }
 
+            outcome.MergedSfdt = ToSfdt(combined);
+            outcome.DocumentName = "Merged-Notice-of-Hearing.docx";
+            combined.Close();
+            return outcome;
+        }
+
+        /// <summary>
+        /// Runs the mail merge on one WordDocument using the detected region strategy.
+        /// Returns true if the merge completed (any missing fields were resolved or the
+        /// document had no missing fields); false if the merge produced missing fields
+        /// that still need user input.
+        ///
+        /// Missing fields are accumulated into the shared outcome so a single prompt
+        /// covers the main template AND every selected supporting document.
+        /// </summary>
+        private static bool RunMergeOnDocument(
+            WordDocument doc,
+            List<CaseData> cases,
+            List<AdditionalMergeValue> additionalData,
+            MergeOutcome outcome,
+            string label,
+            List<string> supportingFieldNames = null)
+        {
             // ---- Region detection (decides the merge strategy) ----
             var detectedGroups = doc.MailMerge.GetMergeGroupNames() ?? new string[0];
             var detectedFields = doc.MailMerge.GetMergeFieldNames() ?? new string[0];
@@ -308,9 +466,9 @@ namespace EJ2APIServices.Services
                 string.Equals(g, CaseRegionName, StringComparison.OrdinalIgnoreCase));
             bool hasPartiesRegion = detectedGroups.Any(g =>
                 string.Equals(g, PartiesRegionName, StringComparison.OrdinalIgnoreCase));
-            Console.WriteLine($"[merge] detected groups: [{string.Join(", ", detectedGroups)}]");
-            Console.WriteLine($"[merge] detected fields: [{string.Join(", ", detectedFields)}]");
-            Console.WriteLine($"[merge] strategy: {(hasCaseRegion && hasPartiesRegion ? "nested (ExecuteNestedGroup)" : "standard (ExecuteGroup)")}");
+            Console.WriteLine($"[merge][{label}] detected groups: [{string.Join(", ", detectedGroups)}]");
+            Console.WriteLine($"[merge][{label}] detected fields: [{string.Join(", ", detectedFields)}]");
+            Console.WriteLine($"[merge][{label}] strategy: {(hasCaseRegion && hasPartiesRegion ? "nested (ExecuteNestedGroup)" : "standard (ExecuteGroup)")}");
 
             // Parent index (1-based) of the case row currently being merged. Tracked from
             // MergeField events of the parent group so missing child fields can be tagged
@@ -321,7 +479,23 @@ namespace EJ2APIServices.Services
             var caseIds = cases.Select(c => c.CaseId).ToList();
             var caseNumbers = cases.Select(c => c.CaseNumber).ToList();
 
+            // For documents without a Case region (most supporting documents - they have
+            // only case-level fields like JudgeName), MergeField for the parent group
+            // never fires, so currentCaseId stays 0. Default to the FIRST selected case
+            // in that situation so missing-field keys are consistent with what the main
+            // template produced for the same case-level field. With FindSuppliedValue's
+            // CaseId=0 fallback, a single user answer applies to every case anyway.
+            int defaultCaseId = caseIds.Count > 0 ? caseIds[0] : 0;
+            string defaultCaseNumber = caseNumbers.Count > 0 ? caseNumbers[0] : "";
+            currentCaseId = defaultCaseId;
+            currentCaseNumber = defaultCaseNumber;
+
             doc.MailMerge.ClearFields = false; // keep unmerged fields until we know what is missing
+
+            // Snapshot the missing-field count so we only inspect fields discovered
+            // while merging THIS document (caller may pass an outcome that already has
+            // missing fields accumulated from a previous run we want to ignore).
+            int missingBefore = outcome.MissingFields.Count;
 
             doc.MailMerge.MergeField += (sender, args) =>
             {
@@ -339,25 +513,51 @@ namespace EJ2APIServices.Services
 
             doc.MailMerge.BeforeClearField += (sender, args) =>
             {
-                // DocIO reports a 0-based row inside the group; the UI contract is 1-based.
-                // Case-level fields (GroupName "Case") get RowIndex 0.
                 string groupName = args.GroupName ?? "";
                 int rowIndex = args.RowIndex < 0 ? 0 : args.RowIndex + 1;
-                if (string.Equals(groupName, CaseRegionName, StringComparison.OrdinalIgnoreCase))
-                {
-                    rowIndex = 0; // case-level field: no row differentiation
-                }
 
-                // Which case is this field in? Child fields inherit the tracked case;
-                // case-level fields are the current case row.
+                // Normalize field tagging so the prompt round-trip is consistent across
+                // the main template and every supporting document:
+                //
+                //   - Fields OUTSIDE any group (GroupName == ""): treat them as
+                //     case-level fields. Tag with GroupName="Case" and RowIndex=0 so the
+                //     same key is produced whether the field lives in the main template
+                //     or in a supporting document.
+                //
+                //   - Fields INSIDE the Case region (GroupName == "Case"): already
+                //     case-level. Force RowIndex=0 (no row differentiation within the
+                //     parent group).
+                //
+                //   - Fields INSIDE the Parties region (GroupName == "Parties"): tag with
+                //     the 1-based row index inside the group so the prompt can address a
+                //     specific party and so the supplied value applies only to that party.
+                //
+                // Missing fields with the same (caseId, groupName, rowIndex, fieldName)
+                // tuple collapse to one entry (AddMissing dedupes).
                 int caseIdForField = currentCaseId;
                 string caseNumberForField = currentCaseNumber;
+
+                if (string.IsNullOrEmpty(groupName)
+                    || string.Equals(groupName, CaseRegionName, StringComparison.OrdinalIgnoreCase))
+                {
+                    groupName = CaseRegionName;
+                    rowIndex = 0;
+                }
+                else
+                {
+                    // Parties group or any other group: keep the row index as reported.
+                    // If the case id is still the default (no Case region in this document),
+                    // the field is at the document level, not per-case, so we tag it
+                    // against the first case to stay consistent with how the main template
+                    // tags case-level fields. The user supplies the value once and the
+                    // FindSuppliedValue CaseId=0 fallback will not match here because the
+                    // field is in a child region - we tag with the default case explicitly.
+                }
 
                 var supplied = FindSuppliedValue(additionalData, caseIdForField, groupName, rowIndex, args.FieldName);
 
                 if (supplied != null && !string.IsNullOrEmpty(supplied.Value))
                 {
-                    // Requirement 1, second request: re-execute the field with the entered value.
                     args.FieldValue = supplied.Value;
                     args.ClearField = false;
                 }
@@ -380,40 +580,170 @@ namespace EJ2APIServices.Services
             // ---- The actual merge: strategy chosen from the detected regions ----
             if (hasCaseRegion && hasPartiesRegion)
             {
-                // Scenario B: nested relational merge (Requirement 5), unchanged.
                 doc.MailMerge.ExecuteNestedGroup(BuildNestedDataSet(cases), BuildNestedCommands());
             }
             else if (hasPartiesRegion)
             {
-                // Scenario A: standard repeating region (Pattern 1). No parent Case region.
                 doc.MailMerge.ExecuteGroup(BuildPartyGroupTable(cases));
-                // Case-level fields outside the region are filled per selection: when
-                // several cases are selected in the standard scenario there is no
-                // per-case repetition, so the first selected case supplies them.
-                var first = cases.FirstOrDefault();
-                doc.MailMerge.Execute(
-                    new[] { "CaseNumber", "CaseCaption" },
-                    new[] { first?.CaseNumber ?? "", first?.CaseCaption ?? "" });
+                ExecuteCaseLevelFields(doc, cases, detectedFields, additionalData);
             }
             else
             {
-                // No regions at all: fill the plain case fields only.
-                var first = cases.FirstOrDefault();
-                doc.MailMerge.Execute(
-                    new[] { "CaseNumber", "CaseCaption" },
-                    new[] { first?.CaseNumber ?? "", first?.CaseCaption ?? "" });
+                ExecuteCaseLevelFields(doc, cases, detectedFields, additionalData);
             }
 
-            if (outcome.MissingFields.Count > 0)
+            // Report the supporting-document fields the case data cannot fill as
+            // missing. This runs for EVERY strategy because the supporting documents
+            // are combined into the same document before the merge - their fields
+            // sit outside the main template's merge regions, so the region execution
+            // never touches them.
+            ReportMissingSupportingFields(supportingFieldNames, additionalData, outcome, defaultCaseId, defaultCaseNumber);
+
+            // New missing fields discovered in this document?
+            if (outcome.MissingFields.Count > missingBefore)
             {
-                doc.Close();
-                return outcome; // no document: the UI must prompt first
+                return false;
             }
 
-            outcome.MergedSfdt = ToSfdt(doc);
-            outcome.DocumentName = "Merged-Notice-of-Hearing.docx";
-            doc.Close();
-            return outcome;
+            return true;
+        }
+
+        /// <summary>
+        /// Fills case-level merge fields that sit OUTSIDE any region.
+        ///
+        /// Two kinds of fields are handled:
+        ///   - Fields the case data provides (CaseNumber, CaseCaption): filled with
+        ///     the first selected case's values.
+        ///   - Fields the user supplied through the missing-field dialog (for example
+        ///     JudgeName or NoticeDate in a supporting document): filled with the
+        ///     value the user entered.
+        ///
+        /// Only fields actually present in the document are filled. With multiple
+        /// selected cases and no parent Case region there is no per-case repetition;
+        /// the first selected case supplies the values for these top-level fields.
+        /// </summary>
+        private static void ExecuteCaseLevelFields(
+            WordDocument doc,
+            List<CaseData> cases,
+            string[] detectedFields,
+            List<AdditionalMergeValue> additionalData)
+        {
+            if (detectedFields == null || detectedFields.Length == 0)
+            {
+                return;
+            }
+
+            var present = new HashSet<string>(
+                detectedFields.Select(f => f ?? ""),
+                StringComparer.OrdinalIgnoreCase);
+
+            var first = cases.FirstOrDefault();
+            string firstCaseNumber = first?.CaseNumber ?? "";
+            string firstCaseCaption = first?.CaseCaption ?? "";
+
+            var names = new List<string>();
+            var values = new List<string>();
+            if (present.Contains("CaseNumber")) { names.Add("CaseNumber"); values.Add(firstCaseNumber); }
+            if (present.Contains("CaseCaption")) { names.Add("CaseCaption"); values.Add(firstCaseCaption); }
+
+            // Values the user supplied for case-level fields (groupName "Case", row 0).
+            if (additionalData != null)
+            {
+                foreach (var supplied in additionalData)
+                {
+                    if (supplied == null || string.IsNullOrEmpty(supplied.Value)) { continue; }
+                    if (!string.Equals(supplied.GroupName ?? "", CaseRegionName, StringComparison.OrdinalIgnoreCase)) { continue; }
+                    if (supplied.RowIndex != 0) { continue; }
+                    if (!present.Contains(supplied.FieldName ?? "")) { continue; }
+                    if (names.Any(n => string.Equals(n, supplied.FieldName, StringComparison.OrdinalIgnoreCase))) { continue; }
+
+                    names.Add(supplied.FieldName);
+                    values.Add(supplied.Value);
+                }
+            }
+
+            if (names.Count > 0)
+            {
+                doc.MailMerge.Execute(names.ToArray(), values.ToArray());
+            }
+        }
+
+        /// <summary>
+        /// Reports the merge fields contributed by the SUPPORTING documents that the
+        /// case data cannot fill, so the UI prompts the user for them.
+        ///
+        /// The supporting documents are combined into the main document BEFORE the mail
+        /// merge runs, so their fields are part of the merged document but sit outside
+        /// the main template's «BeginGroup:Case» / «BeginGroup:Parties» regions. The
+        /// region execution therefore never resolves them, and they have to be
+        /// detected explicitly. Fields the case data DOES provide (CaseNumber,
+        /// CaseCaption) are filled by ExecuteCaseLevelFields and must not be reported.
+        ///
+        /// A field the user already answered for (present in additionalData) is not
+        /// reported again, so the second pass after the prompt can complete.
+        /// </summary>
+        private static void ReportMissingSupportingFields(
+            List<string> supportingFieldNames,
+            List<AdditionalMergeValue> additionalData,
+            MergeOutcome outcome,
+            int defaultCaseId,
+            string defaultCaseNumber)
+        {
+            if (supportingFieldNames == null || supportingFieldNames.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var fieldName in supportingFieldNames.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(fieldName)) { continue; }
+                if (fieldName.StartsWith("BeginGroup:", StringComparison.OrdinalIgnoreCase)) { continue; }
+                if (fieldName.StartsWith("EndGroup:", StringComparison.OrdinalIgnoreCase)) { continue; }
+
+                // Fields the case data supplies are filled by ExecuteCaseLevelFields.
+                if (string.Equals(fieldName, "CaseNumber", StringComparison.OrdinalIgnoreCase)) { continue; }
+                if (string.Equals(fieldName, "CaseCaption", StringComparison.OrdinalIgnoreCase)) { continue; }
+
+                // Already answered by the user -> not missing anymore.
+                var supplied = FindSuppliedValue(
+                    additionalData, defaultCaseId, CaseRegionName, 0, fieldName);
+                if (supplied != null && !string.IsNullOrEmpty(supplied.Value))
+                {
+                    continue;
+                }
+
+                AddMissing(outcome, defaultCaseId, defaultCaseNumber, CaseRegionName, 0, fieldName);
+            }
+        }
+
+        /// <summary>
+        /// Imports a supporting document at the end of the destination document, starting
+        /// on a new page.
+        ///
+        /// Canonical pattern from
+        /// https://help.syncfusion.com/document-processing/word/word-library/net/word-document/merging-word-documents#merging-documents-in-a-new-page
+        ///
+        ///   //Opens the source document
+        ///   WordDocument sourceDocument = new WordDocument(sourceFileName);
+        ///   //Opens the destination document
+        ///   WordDocument destinationDocument = new WordDocument(targetFileName);
+        ///   //Imports the contents of source document at the end of destination document
+        ///   destinationDocument.ImportContent(sourceDocument, ImportOptions.UseDestinationStyles);
+        ///
+        /// The source document's first section keeps its default NewPage break code, so
+        /// the imported content starts on a fresh page. ImportOptions.UseDestinationStyles
+        /// keeps the destination document's style definitions, so the appended content
+        /// matches the main template's look.
+        /// </summary>
+        private static void ImportSupportingDocument(WordDocument destination, WordDocument source, string label)
+        {
+            if (source.Sections.Count > 0)
+            {
+                source.Sections[0].BreakCode = SectionBreakCode.NewPage;
+            }
+
+            destination.ImportContent(source, ImportOptions.UseDestinationStyles);
+            Console.WriteLine($"[merge] combined supporting document: {label}");
         }
 
         /// <summary>

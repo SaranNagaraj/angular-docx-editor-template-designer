@@ -1,0 +1,23 @@
+Placeholder so the Templates folder is tracked in git.
+
+Drop your template DOCX files here:
+
+  Notice of Hearing.docx   (main template - loaded by default on app start)
+  Cover Page.docx          (supporting document)
+  Addendum A.docx          (supporting document)
+  Addendum B.docx          (supporting document)
+  Terms and Conditions.docx (supporting document)
+  Signature Page.docx      (supporting document)
+
+The server lists every .docx in this folder via GET /api/templates
+and serves them as SFDT via GET /api/templates/{id}. The main template
+(Notice of Hearing) is also served via GET /api/template and is loaded
+into the editor by default on application start.
+
+Each document may contain its own MERGEFIELDs (e.g. CaseNumber, CaseCaption,
+NoticeDate, JudgeName, FirstName, LastName, Address, etc.). When the user
+selects supporting documents in the right panel and clicks Generate,
+DocIO runs the mail merge on the main template AND on each selected
+supporting document using the same case data, then appends the merged
+supporting documents to the main one to produce a single consolidated
+output document opened in the editor.

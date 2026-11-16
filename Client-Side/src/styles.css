@@ -177,6 +177,27 @@
     font-size: 0.8125rem;
 }
 
+/* Documents to Merge list */
+.poc-template-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 6px;
+}
+
+.poc-template-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.875rem;
+    color: #111827;
+    cursor: pointer;
+}
+
+.poc-template-item input[type="checkbox"] {
+    margin: 0;
+}
+
 /* Missing field dialog */
 .poc-dialog-backdrop {
     position: fixed;
@@ -217,6 +238,214 @@
 .poc-missing-item input {
     display: block;
     margin-top: 4px;
+}
+
+.poc-checkbox-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    font-size: 0.875rem;
+    color: #374151;
+    cursor: pointer;
+}
+
+.poc-checkbox-row input[type="checkbox"] {
+    margin: 0;
+    width: 16px;
+    height: 16px;
+}
+
+/* Boolean toggle switch (missing-field dialog) */
+.poc-toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+    font-size: 0.875rem;
+    color: #374151;
+    cursor: pointer;
+    user-select: none;
+}
+
+.poc-toggle-row input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.poc-toggle-track {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    background: #d1d5db;
+    border-radius: 999px;
+    transition: background 0.2s ease;
+    flex-shrink: 0;
+}
+
+.poc-toggle-track::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    background: #ffffff;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s ease;
+}
+
+/* Checked state: the sibling input drives the track colour and knob position. */
+.poc-toggle-row input:checked + .poc-toggle-track {
+    background: #2563eb;
+}
+
+.poc-toggle-row input:checked + .poc-toggle-track::after {
+    transform: translateX(18px);
+}
+
+/* Keyboard focus ring on the track when the hidden input is focused. */
+.poc-toggle-row input:focus-visible + .poc-toggle-track {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+.poc-toggle-label {
+    min-width: 24px;
+    font-weight: 500;
+}
+
+.poc-input-invalid {
+    border-color: #dc2626;
+    background: #fef2f2;
+}
+
+.poc-field-error {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.75rem;
+    color: #dc2626;
+}
+
+/* Preview-mode banner above the editor */
+.poc-preview-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #fef3c7;
+    border-bottom: 1px solid #fcd34d;
+    color: #78350f;
+    font-size: 0.8125rem;
+}
+
+/* Action toolbar above the editor: Save / Preview / Export */
+.poc-action-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f9fafb;
+    border-bottom: 1px solid #e5e7eb;
+    flex-wrap: wrap;
+}
+
+/* Toolbar buttons sit side by side and keep their own colours. They must not
+   inherit .poc-btn-block (display:block; width:100%) which would stack them. */
+.poc-action-toolbar .poc-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    min-width: 140px;
+    white-space: nowrap;
+    padding: 7px 18px;
+    font-weight: 500;
+}
+
+/* Save Document - persists the template to the templates folder. */
+.poc-btn-save {
+    background: #ffffff;
+    color: #374151;
+    border-color: #d1d5db;
+}
+
+.poc-btn-save:hover:not(:disabled) {
+    background: #f3f4f6;
+    border-color: #9ca3af;
+}
+
+/* Reset - reloads the default template; subtle gray so it doesn't compete with the
+   primary actions. */
+.poc-btn-reset {
+    background: #f3f4f6;
+    color: #4b5563;
+    border-color: #d1d5db;
+}
+
+.poc-btn-reset:hover:not(:disabled) {
+    background: #e5e7eb;
+    color: #1f2937;
+}
+
+/* Preview Document - runs the merge and shows the result read-only. */
+.poc-btn-preview {
+    background: #f59e0b;
+    border-color: #d97706;
+    color: #ffffff;
+}
+
+.poc-btn-preview:hover:not(:disabled) {
+    background: #d97706;
+}
+
+/* Export as PDF - final download of the merged document. */
+.poc-btn-export {
+    background: #059669;
+    border-color: #047857;
+    color: #ffffff;
+}
+
+.poc-btn-export:hover:not(:disabled) {
+    background: #047857;
+}
+
+/* Open PDF Document - imports a PDF, converts it to Word and opens it. */
+.poc-btn-open-pdf {
+    background: #7c3aed;
+    border-color: #6d28d9;
+    color: #ffffff;
+}
+
+.poc-btn-open-pdf:hover:not(:disabled) {
+    background: #6d28d9;
+}
+
+.poc-action-toolbar .poc-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.poc-preview-banner span {
+    flex: 1;
+    min-width: 0;
+}
+
+.poc-btn-banner {
+    background: #fff;
+    color: #78350f;
+    border-color: #fcd34d;
+    white-space: nowrap;
+}
+
+.poc-btn-banner:hover {
+    background: #fde68a;
 }
 
 .poc-dialog-actions {
