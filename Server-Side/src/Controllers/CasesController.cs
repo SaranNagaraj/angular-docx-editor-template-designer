@@ -325,17 +325,24 @@ namespace EJ2APIServices.Controllers
                     });
                 }
 
-                // Canonical Word -> PDF pattern from the Syncfusion docs:
-                //   using (DocIORenderer renderer = new DocIORenderer())
-                //   using (PdfDocument pdfDocument = renderer.ConvertToPDF(wordDocument))
-                using (var renderer = new DocIORenderer())
-                using (var pdfDocument = renderer.ConvertToPDF(merged))
+                try
                 {
-                    using (var outputStream = new MemoryStream())
+                    // Canonical Word -> PDF pattern from the Syncfusion docs:
+                    //   using (DocIORenderer renderer = new DocIORenderer())
+                    //   using (PdfDocument pdfDocument = renderer.ConvertToPDF(wordDocument))
+                    using (var renderer = new DocIORenderer())
+                    using (var pdfDocument = renderer.ConvertToPDF(merged))
                     {
-                        pdfDocument.Save(outputStream);
-                        return File(outputStream.ToArray(), "application/pdf", "Merged-Notice-of-Hearing.pdf");
+                        using (var outputStream = new MemoryStream())
+                        {
+                            pdfDocument.Save(outputStream);
+                            return File(outputStream.ToArray(), "application/pdf", "Merged-Notice-of-Hearing.pdf");
+                        }
                     }
+                }
+                finally
+                {
+                    merged.Close();
                 }
             }
             finally

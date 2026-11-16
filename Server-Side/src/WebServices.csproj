@@ -25,9 +25,6 @@
     <PackageReference Include="Syncfusion.EJ2.WordEditor.AspNet.Core" Version="*" />
     <PackageReference Include="Syncfusion.EJ2.SpellChecker.AspNet.Core" Version="*" />
     <PackageReference Include="Syncfusion.Licensing" Version="*" />
-    <!-- PDF -> Word: Smart Data Extractor (canonical pattern from
-         https://help.syncfusion.com/document-processing/data-extraction/net/conversions/pdf-to-word) -->
-    <PackageReference Include="Syncfusion.SmartDataExtractor.Net.Core" Version="*" />
     <!-- Word -> PDF: DocIO Renderer (canonical pattern from
          https://help.syncfusion.com/document-processing/word/conversions/word-to-pdf/net/word-to-pdf) -->
     <PackageReference Include="Syncfusion.DocIORenderer.Net.Core" Version="*" />

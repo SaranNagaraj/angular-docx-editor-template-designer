@@ -281,7 +281,7 @@
     font-size: 0.8125rem;
 }
 
-/* Action toolbar above the editor: Open PDF / Save / Preview */
+/* Action toolbar above the editor: Save / Preview / Export */
 .poc-action-toolbar {
     display: flex;
     align-items: center;
@@ -292,10 +292,57 @@
     flex-wrap: wrap;
 }
 
+/* Toolbar buttons sit side by side and keep their own colours. They must not
+   inherit .poc-btn-block (display:block; width:100%) which would stack them. */
 .poc-action-toolbar .poc-btn {
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    min-width: 140px;
     white-space: nowrap;
-    padding: 6px 14px;
+    padding: 7px 18px;
+    font-weight: 500;
+}
+
+/* Save Document - persists the template to the templates folder. */
+.poc-btn-save {
+    background: #ffffff;
+    color: #374151;
+    border-color: #d1d5db;
+}
+
+.poc-btn-save:hover:not(:disabled) {
+    background: #f3f4f6;
+    border-color: #9ca3af;
+}
+
+/* Preview Document - runs the merge and shows the result read-only. */
+.poc-btn-preview {
+    background: #f59e0b;
+    border-color: #d97706;
+    color: #ffffff;
+}
+
+.poc-btn-preview:hover:not(:disabled) {
+    background: #d97706;
+}
+
+/* Export as PDF - final download of the merged document. */
+.poc-btn-export {
+    background: #059669;
+    border-color: #047857;
+    color: #ffffff;
+}
+
+.poc-btn-export:hover:not(:disabled) {
+    background: #047857;
+}
+
+.poc-action-toolbar .poc-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .poc-preview-banner span {

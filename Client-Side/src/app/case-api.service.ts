@@ -168,29 +168,6 @@ export class CaseApiService {
     }
 
     /**
-     * Converts an uploaded PDF to a DOCX and returns the resulting SFDT for the
-     * editor. The converted document is NOT saved to the templates folder; if the
-     * user wants to keep it, they must use Save Document afterwards.
-     */
-    convertPdf(file: File): Promise<string> {
-        const form = new FormData();
-        form.append('file', file, file.name);
-        return firstValueFrom(this.http.post<{ sfdt: string }>('/api/pdf/convert', form))
-            .then(r => r.sfdt);
-    }
-
-    /**
-     * Converts an uploaded PDF and saves the resulting DOCX to the templates folder
-     * so the user can pick it from the template picker and reuse it later.
-     */
-    convertAndSavePdf(file: File): Promise<SaveTemplateResult & { sfdt: string }> {
-        const form = new FormData();
-        form.append('file', file, file.name);
-        return firstValueFrom(this.http.post<SaveTemplateResult & { sfdt: string }>(
-            '/api/pdf/convert-and-save', form));
-    }
-
-    /**
      * Mail merge for the selected cases.
      *
      * The server answers with either
