@@ -1,4 +1,4 @@
-import { Component, ViewChild, signal, computed, AfterViewInit, OnDestroy } from '@angular/core';
+import { Component, ViewChild, signal, computed, effect, AfterViewInit, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { CommonModule } from '@angular/common';
 import { DocumentEditorContainerComponent } from '@syncfusion/ej2-angular-documenteditor';
@@ -216,8 +216,10 @@ function coerceTypedValue(type: FieldType, value: string): string {
                         {{ convertingPdf() ? 'Converting...' : 'Open PDF Document' }}
                     </button>
                     <!-- Hidden file input: clicking Open PDF Document opens the browser's
-                         native file menu dialog, which lets the user pick a PDF. -->
-                    <input #pdfFileInput type="file" accept="application/pdf,.pdf"
+                         native file menu dialog, which lets the user pick a PDF. The
+                         input is given an id so the click handler can address it directly
+                         regardless of ViewChild resolution timing. -->
+                    <input id="pdfFileInput" type="file" accept="application/pdf,.pdf"
                         style="display:none"
                         (change)="onPdfPicked($event)">
                 </div>
@@ -226,7 +228,6 @@ function coerceTypedValue(type: FieldType, value: string): string {
                     height="100%"
                     style="display:block"
                     [enableToolbar]="!previewMode()"
-                    [restrictEditing]="previewMode()"
                     [toolbarMode]="'Ribbon'"
                     serviceUrl="/api/documenteditor/">
                 </ejs-documenteditorcontainer>
@@ -422,10 +423,6 @@ export class App implements AfterViewInit, OnDestroy {
     public exportingPdf = signal(false);
     public convertingPdf = signal(false);
 
-    /** Reference to the hidden file input used by the Open PDF Document button. */
-    @ViewChild('pdfFileInput', { static: false })
-    public pdfFileInput?: HTMLInputElement;
-
     /** Selected supporting documents to append after the merge. */
     public selectedAppendedIds = signal<Set<string>>(new Set<string>());
 
@@ -438,7 +435,16 @@ export class App implements AfterViewInit, OnDestroy {
 
     private disposed = false;
 
-    constructor(private api: CaseApiService) { }
+    constructor(private api: CaseApiService) {
+        // Mirror the previewMode signal onto the editor's actual read-only state.
+        // The container's `restrictEditing` input only toggles the Restrict-Editing
+        // pane; the editor's editing permission is controlled by
+        // documentEditor.isReadOnly. The effect ensures the two stay in sync on
+        // every preview-mode transition.
+        effect(() => {
+            this.applyEditorReadOnly(this.previewMode());
+        });
+    }
 
     ngAfterViewInit(): void {
         // Startup: schema first (independent of any search)...
@@ -535,7 +541,25 @@ export class App implements AfterViewInit, OnDestroy {
 
     private openInEditor(sfdt: string): void {
         const editor = this.editor;
-        if (editor) { editor.open(sfdt); }
+        if (!editor) { return; }
+        editor.open(sfdt);
+        // The editor's read-only state may have been reset by open(). Re-apply the
+        // current preview-mode setting so a freshly opened document stays in the
+        // expected read-only / editable state.
+        this.applyEditorReadOnly(this.previewMode());
+    }
+
+    /**
+     * Lock or unlock the editor's read-only state. The container's `restrictEditing`
+     * input only toggles the Restrict-Editing pane - the editor's actual editing
+     * permission is controlled by `documentEditor.isReadOnly`. Every preview-mode
+     * transition calls this so the banner and the editing state stay in sync.
+     */
+    private applyEditorReadOnly(readOnly: boolean): void {
+        const editor = this.editor;
+        if (editor && typeof editor.isReadOnly === 'boolean') {
+            try { editor.isReadOnly = readOnly; } catch { /* the editor may not be ready yet */ }
+        }
     }
 
     /**
@@ -699,7 +723,8 @@ export class App implements AfterViewInit, OnDestroy {
      */
     public openPdfDocument(): void {
         if (this.convertingPdf()) { return; }
-        this.pdfFileInput?.click();
+        const input = document.getElementById('pdfFileInput') as HTMLInputElement | null;
+        input?.click();
     }
 
     /**
@@ -781,26 +806,20 @@ export class App implements AfterViewInit, OnDestroy {
      * Final click: serialise the current editor document, POST to /api/generate on the
      * server, and open the merged SFDT back in the editor. The result is previewed,
      * never downloaded.
+     *
+     * Always runs a fresh merge with the currently selected case data and supporting
+     * documents, even after a Preview - the user may have changed the selection and
+     * the latest data must drive the output. The cached previewedSfdt is intentionally
+     * discarded so the editor ends up with the freshly generated document.
      */
     public generate(): void {
         if (this.selectedIds().size === 0) { return; }
-        // If a preview is already showing the assembled document, reuse the cached SFDT
-        // instead of re-running the merge - the user has reviewed the content already.
-        if (this.previewMode() && this.previewedSfdt) {
-            this.previewMode.set(false);
-            this.openInEditor(this.previewedSfdt);
-            this.previewedSfdt = null;
-            // The editor now holds the GENERATED output, not a template - saving it
-            // back would overwrite a template file with merged content.
-            this.editorHoldsTemplate.set(false);
-            const appendedCount = this.selectedAppendedIds().size;
-            const caseCount = this.selectedIds().size;
-            const suffix = appendedCount > 0
-                ? ` and merged ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
-                : '';
-            this.statusMessage.set(`Generated ${caseCount} case(s) into one document${suffix}.`);
-            return;
-        }
+
+        // Leave preview mode before the merge request, so the editor is in the right
+        // state to receive the final document.
+        this.previewMode.set(false);
+        this.previewedSfdt = null;
+        this.applyEditorReadOnly(false);
 
         this.generating.set(true);
         this.statusMessage.set('');
