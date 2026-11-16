@@ -340,6 +340,17 @@
     background: #047857;
 }
 
+/* Open PDF Document - imports a PDF, converts it to Word and opens it. */
+.poc-btn-open-pdf {
+    background: #7c3aed;
+    border-color: #6d28d9;
+    color: #ffffff;
+}
+
+.poc-btn-open-pdf:hover:not(:disabled) {
+    background: #6d28d9;
+}
+
 .poc-action-toolbar .poc-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;

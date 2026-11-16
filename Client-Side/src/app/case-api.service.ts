@@ -138,6 +138,18 @@ export class CaseApiService {
     }
 
     /**
+     * Converts an uploaded PDF to a Word document on the server and returns the
+     * result as SFDT so the Document Editor can open it directly.
+     * Server side uses Syncfusion's DataExtractor.ExtractDataAsWordDocument.
+     */
+    convertPdfToWord(file: File): Promise<string> {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        return firstValueFrom(this.http.post<{ sfdt: string }>('/api/pdf/convert', form))
+            .then(r => r.sfdt);
+    }
+
+    /**
      * Runs the same mail merge as /api/generate and returns the result as a PDF
      * (server uses Syncfusion DocIORenderer for the Word -> PDF step). The browser
      * triggers a download via the returned Blob URL.

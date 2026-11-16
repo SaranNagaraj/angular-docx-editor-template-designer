@@ -211,6 +211,15 @@ function coerceTypedValue(type: FieldType, value: string): string {
                         [disabled]="selectedIds().size === 0 || exportingPdf() || generating()">
                         {{ exportingPdf() ? 'Exporting...' : 'Export as PDF' }}
                     </button>
+                    <button type="button" class="poc-btn poc-btn-open-pdf" (click)="openPdfDocument()"
+                        [disabled]="convertingPdf()">
+                        {{ convertingPdf() ? 'Converting...' : 'Open PDF Document' }}
+                    </button>
+                    <!-- Hidden file input: clicking Open PDF Document opens the browser's
+                         native file menu dialog, which lets the user pick a PDF. -->
+                    <input #pdfFileInput type="file" accept="application/pdf,.pdf"
+                        style="display:none"
+                        (change)="onPdfPicked($event)">
                 </div>
                 <ejs-documenteditorcontainer
                     #container
@@ -411,6 +420,11 @@ export class App implements AfterViewInit, OnDestroy {
     public editorHoldsTemplate = signal(false);
     public saving = signal(false);
     public exportingPdf = signal(false);
+    public convertingPdf = signal(false);
+
+    /** Reference to the hidden file input used by the Open PDF Document button. */
+    @ViewChild('pdfFileInput', { static: false })
+    public pdfFileInput?: HTMLInputElement;
 
     /** Selected supporting documents to append after the merge. */
     public selectedAppendedIds = signal<Set<string>>(new Set<string>());
@@ -674,6 +688,65 @@ export class App implements AfterViewInit, OnDestroy {
             this.statusMessage.set(`Could not save '${id}'. Check the service log.`);
         }).finally(() => {
             this.saving.set(false);
+        });
+    }
+
+    // ---------------- Open PDF Document ----------------
+
+    /**
+     * Opens the browser's native file menu dialog so the user can pick a PDF.
+     * The picked file is handled by onPdfPicked().
+     */
+    public openPdfDocument(): void {
+        if (this.convertingPdf()) { return; }
+        this.pdfFileInput?.click();
+    }
+
+    /**
+     * Sends the picked PDF to the server, which converts it to a Word document and
+     * returns the SFDT. The converted document opens in the editor.
+     *
+     * The converted document is NOT written to the templates folder, so the editor
+     * no longer holds a template that Save Document could overwrite - the user can
+     * still save it explicitly once a template file name is chosen.
+     */
+    public onPdfPicked(ev: Event): void {
+        const input = ev.target as HTMLInputElement;
+        const file = input.files && input.files.length > 0 ? input.files[0] : null;
+        // Reset the input so picking the same file twice in a row still fires.
+        input.value = '';
+
+        if (!file) { return; }
+        if (!file.name.toLowerCase().endsWith('.pdf')) {
+            this.statusMessage.set('Only PDF files are supported.');
+            return;
+        }
+
+        this.convertingPdf.set(true);
+        this.statusMessage.set(`Converting '${file.name}'...`);
+
+        this.api.convertPdfToWord(file).then(sfdt => {
+            if (this.disposed) { return; }
+            this.openInEditor(sfdt);
+            // The editor holds a converted document, not a template from the
+            // templates folder - Save Document must not overwrite one.
+            this.currentDocumentId = '';
+            this.editorHoldsDefaultTemplate = false;
+            this.editorHoldsTemplate.set(false);
+            this.previewMode.set(false);
+            this.previewedSfdt = null;
+            this.statusMessage.set(`Converted '${file.name}' to Word and opened it in the editor.`);
+        }).catch((err: unknown) => {
+            let message: string;
+            if (err && typeof err === 'object' && 'error' in err) {
+                const inner = (err as { error?: { message?: string } }).error;
+                message = inner?.message ?? `Could not convert '${file.name}'.`;
+            } else {
+                message = `Could not convert '${file.name}'.`;
+            }
+            this.statusMessage.set(message);
+        }).finally(() => {
+            this.convertingPdf.set(false);
         });
     }
 
