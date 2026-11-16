@@ -198,13 +198,6 @@ function coerceTypedValue(type: FieldType, value: string): string {
                     <span><strong>Preview mode.</strong> The editor is read-only. Review the assembled document, then click <strong>Generate Document</strong> to finalize or <strong>Back to Edit</strong> to return to the template.</span>
                     <button type="button" class="poc-btn poc-btn-banner" (click)="exitPreview()">Back to Edit</button>
                 </div>
-                <div class="poc-pdf-banner" *ngIf="showPdfDownload()">
-                    <span><strong>Converted from PDF.</strong> The editor shows a simplified SFDT preview. For the original layout (tables, headers, run-level styling) download the DOCX below.</span>
-                    <button type="button" class="poc-btn poc-btn-banner"
-                        (click)="downloadConvertedDocx()">Download DOCX</button>
-                    <button type="button" class="poc-btn poc-btn-banner-ghost"
-                        (click)="dismissPdfDownload()">Dismiss</button>
-                </div>
                 <div class="poc-action-toolbar">
                     <button type="button" class="poc-btn poc-btn-save" (click)="save()"
                         [disabled]="saving() || !editorHoldsTemplate() || !currentDocumentId">
@@ -429,17 +422,6 @@ export class App implements AfterViewInit, OnDestroy {
     public saving = signal(false);
     public exportingPdf = signal(false);
     public convertingPdf = signal(false);
-
-    /**
-     * True while the user has a freshly converted PDF -> DOCX document available for
-     * download. Drives the "Download DOCX" banner that explains the SFDT preview is
-     * lossy compared with the DOCX.
-     */
-    public showPdfDownload = signal(false);
-    /** Base64-encoded DOCX returned by /api/pdf/convert alongside the SFDT. */
-    private convertedDocxBase64 = '';
-    /** Suggested file name for the DOCX download. */
-    private convertedDocxName = '';
 
     /** Selected supporting documents to append after the merge. */
     public selectedAppendedIds = signal<Set<string>>(new Set<string>());
@@ -747,12 +729,11 @@ export class App implements AfterViewInit, OnDestroy {
 
     /**
      * Sends the picked PDF to the server, which converts it to a Word document and
-     * returns both the SFDT (for the editor) and the DOCX bytes (for layout-faithful
-     * download). The SFDT opens in the editor; the DOCX is offered as a download
-     * button so the user can preserve the original PDF layout.
+     * returns the SFDT. The converted document opens in the editor.
      *
      * The converted document is NOT written to the templates folder, so the editor
-     * no longer holds a template that Save Document could overwrite.
+     * no longer holds a template that Save Document could overwrite - the user can
+     * still save it explicitly once a template file name is chosen.
      */
     public onPdfPicked(ev: Event): void {
         const input = ev.target as HTMLInputElement;
@@ -769,9 +750,9 @@ export class App implements AfterViewInit, OnDestroy {
         this.convertingPdf.set(true);
         this.statusMessage.set(`Converting '${file.name}'...`);
 
-        this.api.convertPdfToWord(file).then(result => {
+        this.api.convertPdfToWord(file).then(sfdt => {
             if (this.disposed) { return; }
-            this.openInEditor(result.sfdt);
+            this.openInEditor(sfdt);
             // The editor holds a converted document, not a template from the
             // templates folder - Save Document must not overwrite one.
             this.currentDocumentId = '';
@@ -779,15 +760,7 @@ export class App implements AfterViewInit, OnDestroy {
             this.editorHoldsTemplate.set(false);
             this.previewMode.set(false);
             this.previewedSfdt = null;
-
-            // Hold onto the DOCX bytes so the user can download them with the
-            // original PDF layout preserved. The SFDT round-trip is lossy;
-            // the DOCX is the canonical representation.
-            this.convertedDocxBase64 = result.docxBase64;
-            this.convertedDocxName = result.fileName;
-            this.showPdfDownload.set(true);
-
-            this.statusMessage.set(`Converted '${file.name}' to Word and opened it in the editor. Use 'Download DOCX' above for the original layout.`);
+            this.statusMessage.set(`Converted '${file.name}' to Word and opened it in the editor.`);
         }).catch((err: unknown) => {
             let message: string;
             if (err && typeof err === 'object' && 'error' in err) {
@@ -800,40 +773,6 @@ export class App implements AfterViewInit, OnDestroy {
         }).finally(() => {
             this.convertingPdf.set(false);
         });
-    }
-
-    /**
-     * Downloads the DOCX produced by the most recent PDF conversion. The bytes
-     * were returned by the server alongside the SFDT, so no second round trip
-     * is needed and the download happens immediately.
-     */
-    public downloadConvertedDocx(): void {
-        const b64 = this.convertedDocxBase64;
-        const name = this.convertedDocxName;
-        if (!b64 || !name) {
-            this.statusMessage.set('No converted DOCX is available. Open a PDF first.');
-            return;
-        }
-
-        const binary = atob(b64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) { bytes[i] = binary.charCodeAt(i); }
-        const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        this.statusMessage.set(`Downloaded '${name}'.`);
-    }
-
-    public dismissPdfDownload(): void {
-        this.showPdfDownload.set(false);
-        this.convertedDocxBase64 = '';
-        this.convertedDocxName = '';
     }
 
     // ---------------- Supporting document selection ----------------

@@ -372,35 +372,6 @@
     background: #fde68a;
 }
 
-/* Banner shown after a PDF has been converted: lets the user download the DOCX
-   so they keep the original layout (the SFDT round-trip is lossy). */
-.poc-pdf-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 8px 12px;
-    background: #ede9fe;
-    border-bottom: 1px solid #c4b5fd;
-    color: #4c1d95;
-    font-size: 0.8125rem;
-}
-
-.poc-pdf-banner span {
-    flex: 1;
-    min-width: 0;
-}
-
-.poc-btn-banner-ghost {
-    background: transparent;
-    color: #4c1d95;
-    border-color: #c4b5fd;
-}
-
-.poc-btn-banner-ghost:hover {
-    background: #ddd6fe;
-}
-
 .poc-dialog-actions {
     display: flex;
     justify-content: flex-end;
