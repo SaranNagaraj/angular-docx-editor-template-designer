@@ -427,6 +427,18 @@
     background: #6d28d9;
 }
 
+/* XSL to Word Document - converts the XSL stylesheet into a Word mail-merge
+   template and opens it. */
+.poc-btn-xsl {
+    background: #0891b2;
+    border-color: #0e7490;
+    color: #ffffff;
+}
+
+.poc-btn-xsl:hover:not(:disabled) {
+    background: #0e7490;
+}
+
 .poc-action-toolbar .poc-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
