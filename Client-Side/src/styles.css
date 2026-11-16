@@ -240,6 +240,34 @@
     margin-top: 4px;
 }
 
+.poc-checkbox-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    font-size: 0.875rem;
+    color: #374151;
+    cursor: pointer;
+}
+
+.poc-checkbox-row input[type="checkbox"] {
+    margin: 0;
+    width: 16px;
+    height: 16px;
+}
+
+.poc-input-invalid {
+    border-color: #dc2626;
+    background: #fef2f2;
+}
+
+.poc-field-error {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.75rem;
+    color: #dc2626;
+}
+
 .poc-dialog-actions {
     display: flex;
     justify-content: flex-end;

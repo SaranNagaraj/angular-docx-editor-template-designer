@@ -9,6 +9,8 @@ import {
 import {
     CaseApiService,
     FieldSchema,
+    FieldSchemaEntry,
+    FieldType,
     CaseInfo,
     MissingField,
     AdditionalMergeValue,
@@ -22,12 +24,29 @@ interface MissingFieldInput {
     rowIndex: number;
     fieldName: string;
     label: string;
+    type: FieldType;
     value: string;
 }
 
 interface SchemaGroupView {
     name: string;
-    fields: { name: string; type: string }[];
+    fields: { name: string; type: FieldType }[];
+}
+
+/**
+ * Static field metadata map: field name -> { type, label, groupName }.
+ *
+ * Built once from GET /api/schema on startup and used to (a) drive the missing-field
+ * dialog input type and label and (b) validate typed values before they are
+ * submitted back to the server as strings.
+ *
+ * Fields not present in the schema (custom fields typed in via the "Add Custom
+ * Merge Field" button) default to string input.
+ */
+interface FieldMeta {
+    type: FieldType;
+    label?: string;
+    groupName: string;
 }
 
 /**
@@ -36,14 +55,57 @@ interface SchemaGroupView {
  * "FieldName (case CaseNumber)". Row-level fields inside a repeating group
  * add "for item N in group GroupName".
  */
-function buildMissingFieldLabel(m: { fieldName: string; groupName: string; rowIndex: number; caseNumber: string }): string {
+function buildMissingFieldLabel(
+    m: { fieldName: string; groupName: string; rowIndex: number; caseNumber: string },
+    fieldMeta: Record<string, FieldMeta>
+): string {
     const isCaseLevel = !m.groupName
         || m.groupName === 'Case'
         || m.rowIndex === 0;
-    const base = isCaseLevel
-        ? `${m.fieldName} (case ${m.caseNumber})`
-        : `${m.fieldName} for item ${m.rowIndex} in group ${m.groupName} (case ${m.caseNumber})`;
-    return base;
+    const friendly = fieldMeta[m.fieldName]?.label || m.fieldName;
+    return isCaseLevel
+        ? `${friendly} (case ${m.caseNumber})`
+        : `${friendly} for item ${m.rowIndex} in group ${m.groupName} (case ${m.caseNumber})`;
+}
+
+/**
+ * Validates one typed value. Returns null when valid, otherwise an error message.
+ * - date:    non-empty + parseable by Date
+ * - number:  non-empty + finite number
+ * - boolean: always valid (a checkbox always has a value)
+ * - string:  any value is valid
+ */
+function validateTypedValue(type: FieldType, value: string): string | null {
+    if (type === 'boolean') {
+        return null;
+    }
+    if (!value || !value.trim()) {
+        return type === 'string' ? null : 'Value is required.';
+    }
+    if (type === 'number') {
+        const n = Number(value);
+        if (!Number.isFinite(n)) {
+            return 'Enter a valid number.';
+        }
+    } else if (type === 'date') {
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) {
+            return 'Enter a valid date.';
+        }
+    }
+    return null;
+}
+
+/**
+ * Coerces a typed value to the string that the server stores in
+ * AdditionalMergeValue.value. Booleans become 'true' / 'false'; everything
+ * else is returned as-is.
+ */
+function coerceTypedValue(type: FieldType, value: string): string {
+    if (type === 'boolean') {
+        return value === 'true' || value === 'on' ? 'true' : 'false';
+    }
+    return value;
 }
 
 /**
@@ -222,22 +284,56 @@ function buildMissingFieldLabel(m: { fieldName: string; groupName: string; rowIn
         </div>
     </div>
 
-    <!-- Missing merge field prompt (Requirement 1) -->
+    <!-- Missing merge field prompt (typed inputs based on /api/schema) -->
     <div class="poc-dialog-backdrop" *ngIf="showMissingDialog()">
         <div class="poc-dialog" role="dialog" aria-label="Enter missing merge field values">
             <h2>Missing merge field values</h2>
             <p class="poc-muted">The template contains merge fields the case data does not fill. Enter the missing values to continue.</p>
             <div class="poc-missing-list">
                 @for (item of missingInputs(); track $index) {
-                    <label class="poc-missing-item">
+                    <div class="poc-missing-item">
                         <span>Enter {{ item.label }}:</span>
-                        <input type="text" class="poc-input" [(ngModel)]="item.value" name="missingValue{{ $index }}">
-                    </label>
+
+                        @switch (item.type) {
+                            @case ('date') {
+                                <input type="date" class="poc-input"
+                                    [(ngModel)]="item.value"
+                                    name="missingValue{{ $index }}"
+                                    [class.poc-input-invalid]="invalidFor(item)">
+                            }
+                            @case ('number') {
+                                <input type="number" class="poc-input" step="any"
+                                    [(ngModel)]="item.value"
+                                    name="missingValue{{ $index }}"
+                                    [class.poc-input-invalid]="invalidFor(item)">
+                            }
+                            @case ('boolean') {
+                                <label class="poc-checkbox-row">
+                                    <input type="checkbox"
+                                        [checked]="item.value === 'true'"
+                                        (change)="onBooleanChange(item, $event)"
+                                        name="missingValue{{ $index }}">
+                                    <span>{{ item.value === 'true' ? 'Yes' : 'No' }}</span>
+                                </label>
+                            }
+                            @default {
+                                <input type="text" class="poc-input"
+                                    [(ngModel)]="item.value"
+                                    name="missingValue{{ $index }}">
+                            }
+                        }
+
+                        @if (validationError(item); as err) {
+                            <span class="poc-field-error">{{ err }}</span>
+                        }
+                    </div>
                 }
             </div>
             <div class="poc-dialog-actions">
                 <button type="button" class="poc-btn" (click)="cancelMissingDialog()">Cancel</button>
-                <button type="button" class="poc-btn poc-btn-primary" (click)="submitMissingValues()">Continue</button>
+                <button type="button" class="poc-btn poc-btn-primary"
+                    (click)="submitMissingValues()"
+                    [disabled]="hasValidationErrors()">Continue</button>
             </div>
         </div>
     </div>
@@ -249,6 +345,11 @@ export class App implements AfterViewInit, OnDestroy {
 
     /** Merge field explorer tree, built from GET /api/schema on startup. */
     public schemaGroups = signal<SchemaGroupView[]>([]);
+
+    /** Static field metadata map: field name -> { type, label, groupName }.
+     * Used to drive the missing-field dialog (input type, label) and to
+     * validate typed values before they are submitted as strings. */
+    public fieldMeta: Record<string, FieldMeta> = {};
 
     public keyword = '';
     public results = signal<CaseInfo[]>([]);
@@ -280,6 +381,7 @@ export class App implements AfterViewInit, OnDestroy {
         // Startup: schema first (independent of any search)...
         this.api.getSchema().then(schema => {
             if (this.disposed) { return; }
+            this.fieldMeta = this.buildFieldMeta(schema);
             this.schemaGroups.set(this.buildSchemaGroups(schema));
         }).catch(() => {
             this.statusMessage.set('Could not load the merge field schema from /api/schema.');
@@ -314,13 +416,42 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     private buildSchemaGroups(schema: FieldSchema): SchemaGroupView[] {
-        return Object.keys(schema).map(groupName => ({
-            name: groupName,
-            fields: Object.keys(schema[groupName]).map(fieldName => ({
-                name: fieldName,
-                type: schema[groupName][fieldName]
-            }))
-        }));
+        return Object.keys(schema).map(groupName => {
+            const group = (schema as Record<string, { [fieldName: string]: FieldSchemaEntry } | undefined>)[groupName];
+            if (!group) {
+                return { name: groupName, fields: [] };
+            }
+            return {
+                name: groupName,
+                fields: Object.keys(group).map(fieldName => ({
+                    name: fieldName,
+                    type: group[fieldName].type
+                }))
+            };
+        });
+    }
+
+    /**
+     * Flattens the grouped schema into a fieldName -> { type, label, groupName } map
+     * the rest of the app can index directly. Custom fields typed in via the
+     * "Add Custom Merge Field" button are not in the schema; they default to a
+     * string input at the dialog site.
+     */
+    private buildFieldMeta(schema: FieldSchema): Record<string, FieldMeta> {
+        const meta: Record<string, FieldMeta> = {};
+        const groups = schema as Record<string, { [fieldName: string]: FieldSchemaEntry } | undefined>;
+        for (const groupName of Object.keys(groups)) {
+            const group = groups[groupName];
+            if (!group) continue;
+            for (const fieldName of Object.keys(group)) {
+                meta[fieldName] = {
+                    type: group[fieldName].type,
+                    label: group[fieldName].label,
+                    groupName
+                };
+            }
+        }
+        return meta;
     }
 
     /** The editor instance behind the container. */
@@ -482,15 +613,22 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     private openMissingDialog(missing: MissingField[]): void {
-        this.missingInputs.set(missing.map(m => ({
-            caseId: m.caseId,
-            caseNumber: m.caseNumber,
-            groupName: m.groupName,
-            rowIndex: m.rowIndex,
-            fieldName: m.fieldName,
-            label: buildMissingFieldLabel(m),
-            value: ''
-        })));
+        this.missingInputs.set(missing.map(m => {
+            // Resolve the type from the static field-metadata map; unknown fields
+            // (custom fields typed in via "Add Custom Merge Field") default to string.
+            const meta = this.fieldMeta[m.fieldName];
+            const type: FieldType = meta?.type ?? 'string';
+            return {
+                caseId: m.caseId,
+                caseNumber: m.caseNumber,
+                groupName: m.groupName,
+                rowIndex: m.rowIndex,
+                fieldName: m.fieldName,
+                type,
+                label: buildMissingFieldLabel(m, this.fieldMeta),
+                value: this.defaultValueFor(type)
+            };
+        }));
         this.showMissingDialog.set(true);
     }
 
@@ -501,19 +639,47 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     /**
+     * Called from the boolean checkbox. Checkbox state ('true'/'false') is the
+     * only thing the server cares about; the visible label is a side effect.
+     */
+    public onBooleanChange(item: MissingFieldInput, ev: Event): void {
+        const checked = (ev.target as HTMLInputElement).checked;
+        const next = this.missingInputs().map(x => x === item ? { ...x, value: checked ? 'true' : 'false' } : x);
+        this.missingInputs.set(next);
+    }
+
+    /** Validation helper used by the template. */
+    public validationError(item: MissingFieldInput): string | null {
+        return validateTypedValue(item.type, item.value);
+    }
+
+    public invalidFor(item: MissingFieldInput): boolean {
+        return this.validationError(item) != null;
+    }
+
+    public hasValidationErrors(): boolean {
+        return this.missingInputs().some(item => this.validationError(item) != null);
+    }
+
+    private defaultValueFor(type: FieldType): string {
+        if (type === 'boolean') return 'false';
+        return '';
+    }
+
+    /**
      * Second request (Requirement 1): re-run the merge with the API data plus the
-     * values entered in the dialog.
+     * values entered in the dialog. Values are coerced to strings here so the
+     * server contract is unchanged.
      */
     public submitMissingValues(): void {
         const additionalMergeData: AdditionalMergeValue[] = this.missingInputs()
-            .filter(item => item.value && item.value.trim())
             .map(item => ({
                 caseId: item.caseId,
                 caseNumber: item.caseNumber,
                 groupName: item.groupName,
                 rowIndex: item.rowIndex,
                 fieldName: item.fieldName,
-                value: item.value.trim()
+                value: coerceTypedValue(item.type, item.value)
             }));
 
         this.showMissingDialog.set(false);

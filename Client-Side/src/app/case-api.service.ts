@@ -2,9 +2,20 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 
-export interface SchemaGroup { [fieldName: string]: string; }
-/** Merge field schema: group name -> field name -> field type. */
-export interface FieldSchema { [groupName: string]: SchemaGroup; }
+export type FieldType = 'string' | 'date' | 'number' | 'boolean';
+
+/** One entry in the merge field schema (drives the missing-field dialog). */
+export interface FieldSchemaEntry {
+    type: FieldType;
+    label?: string;
+    description?: string;
+}
+
+/** Merge field schema: group name -> field name -> typed entry. */
+export interface FieldSchema {
+    Case?: { [fieldName: string]: FieldSchemaEntry };
+    Parties?: { [fieldName: string]: FieldSchemaEntry };
+}
 
 export interface CaseInfo {
     CaseId: number;

@@ -37,7 +37,11 @@ namespace EJ2APIServices.Controllers
         }
 
         /// <summary>
-        /// Merge field schema for the explorer and the Insert Merge Field dialog.
+        /// Merge field schema for the explorer, the Insert Merge Field dialog, and the
+        /// missing-field prompt. Each entry carries a type tag that drives the UI input
+        /// control: "string" (default text box), "date" (date picker), "number" (numeric
+        /// text box), or "boolean" (checkbox). All values are submitted back to the
+        /// server as strings regardless of type.
         ///
         /// Field names are source-aware: fields reachable inside the Parties region
         /// carry the case source with a "Case:" prefix («Case:CaseNumber»), party
@@ -47,18 +51,20 @@ namespace EJ2APIServices.Controllers
         [Route("/api/schema")]
         public IActionResult Schema()
         {
-            return Ok(new Dictionary<string, object>
+            return Ok(new FieldSchema
             {
-                ["Case"] = new Dictionary<string, string>
+                Case = new Dictionary<string, FieldSchemaEntry>
                 {
-                    ["Case:CaseNumber"] = "string",
-                    ["Case:CaseCaption"] = "string"
+                    ["CaseNumber"]  = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Case Number" },
+                    ["CaseCaption"] = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Case Caption" },
+                    ["NoticeDate"]  = new FieldSchemaEntry { Type = FieldTypes.Date,    Label = "Notice Date" },
+                    ["JudgeName"]   = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Presiding Judge" }
                 },
-                ["Parties"] = new Dictionary<string, string>
+                Parties = new Dictionary<string, FieldSchemaEntry>
                 {
-                    ["FirstName"] = "string",
-                    ["LastName"] = "string",
-                    ["Address"] = "string"
+                    ["FirstName"] = new FieldSchemaEntry { Type = FieldTypes.String, Label = "First Name" },
+                    ["LastName"]  = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Last Name" },
+                    ["Address"]   = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Mailing Address" }
                 }
             });
         }
