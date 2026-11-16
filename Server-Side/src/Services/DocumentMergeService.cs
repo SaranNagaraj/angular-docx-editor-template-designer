@@ -302,13 +302,34 @@ namespace EJ2APIServices.Services
         ///   Scenario B (nested regions): the template wraps «BeginGroup:Parties» inside
         ///   «BeginGroup:Case». Detected groups: [Case, Parties]. Strategy: the existing
         ///   relational MailMerge.ExecuteNestedGroup(dataSet, commands) with parent-child
-        ///   resolution (Pattern 2 / Requirement 5) - unchanged.
+        ///      resolution (Pattern 2 / Requirement 5) - unchanged.
         ///
         /// The same strategy is applied to every selected supporting document so each
         /// one's merge fields (CaseNumber, JudgeName, NoticeDate, ...) are filled using
-        /// the same case data. After every document has been merged, the supporting
-        /// documents are appended to the main document (one page break between each),
-        /// producing one consolidated output.
+        /// the same case data.
+        ///
+        /// Missing-field collection (no additionalData): Phase 1 (main) AND Phase 2
+        /// (every supporting doc) both run their merge. Each doc's missing fields are
+        /// accumulated into a single outcome, so the user gets ONE prompt covering the
+        /// main template AND every supporting document. Nothing is appended in this pass.
+        /// On the second call (with the user's additionalMergeData) Phase 1 and Phase 2
+        /// run again, the supplied values are injected through BeforeClearField, and
+        /// the merged supporting documents are appended to the main merged document
+        /// (one page break between each), producing one consolidated output.
+        ///
+        /// Field tagging is normalized so the prompt round-trip is consistent across
+        /// the main template and supporting documents:
+        ///
+        ///   - Fields OUTSIDE any group (GroupName == "") are tagged with
+        ///     GroupName="Case" and RowIndex=0, against the first selected case. The
+        ///     supplied-value lookup uses CaseId==0 OR CaseId==match, so a single user
+        ///     answer applies to every case and every document that needs it.
+        ///
+        ///   - Fields INSIDE the Case region are tagged with GroupName="Case" and
+        ///     RowIndex=0, against the current case row from the MergeField event.
+        ///
+        ///   - Fields INSIDE the Parties region are tagged with GroupName="Parties"
+        ///     and the 1-based row index inside the group, against the current case row.
         ///
         /// Exact code path:
         ///   1. Region discovery (per document):  doc.MailMerge.GetMergeGroupNames() /
@@ -317,14 +338,13 @@ namespace EJ2APIServices.Services
         ///                        BuildNestedDataSet()/BuildNestedCommands() for the nested path.
         ///   3. Mail merge:       ExecuteGroup(...) or ExecuteNestedGroup(...) per scenario.
         ///   4. Missing detection: BeforeClearField fires for every field DocIO could not
-        ///      fill. MergeField events track which case row is current (nested path) so
-        ///      each missing field is tagged with its CaseId/CaseNumber. AdditionalMergeData
-        ///      values are injected through the same event. Missing fields are accumulated
-        ///      across the main template and every supporting document - one prompt covers
-        ///      all of them.
-        ///   5. Append supporting documents: DocIO.AppendDocument is called for each
-        ///      merged supporting document in the order the caller supplied them, with
-        ///      SectionBreakCode.NewPage between each, producing ONE consolidated document.
+        ///      fill. AdditionalMergeData values are injected through the same event.
+        ///      Missing fields are accumulated across the main template and every
+        ///      supporting document - one prompt covers all of them.
+        ///   5. Append supporting documents (production pass only): DocIO.AppendDocument
+        ///      is called for each merged supporting document in the order the caller
+        ///      supplied them, with SectionBreakCode.NewPage between each, producing ONE
+        ///      consolidated document.
         /// </summary>
         public static MergeOutcome Merge(
             WordDocument mainTemplate,
@@ -337,10 +357,16 @@ namespace EJ2APIServices.Services
             var outcome = new MergeOutcome();
 
             var mainResult = RunMergeOnDocument(main, cases, additionalData, outcome, "main");
-            if (!mainResult) { return outcome; } // missing fields: prompt the user, no document
 
-            // Phase 2: merge each supporting document (with the same case data + supplied
-            // additional values), then append to the main merged document.
+            // Phase 2: merge every selected supporting document. Run this even when the main
+            // template produced missing fields, so the user gets a SINGLE prompt covering the
+            // main template AND every supporting document in one go.
+            //
+            // We do NOT append yet: if either phase has missing fields, the caller will
+            // prompt the user and re-call Merge(...) with additionalData populated. The
+            // current run only collects missing fields; the production run (after the
+            // prompt) does the actual appending.
+            var supportingClones = new List<(string Label, WordDocument Doc)>();
             if (supportingDocumentPaths != null && supportingDocumentPaths.Count > 0)
             {
                 for (int i = 0; i < supportingDocumentPaths.Count; i++)
@@ -352,26 +378,38 @@ namespace EJ2APIServices.Services
                         continue;
                     }
 
-                    // Clone the loaded supporting doc so MailMerge state on the main
-                    // document isn't disturbed. We open a fresh WordDocument for each.
-                    using (var src = new WordDocument(path, FormatType.Docx))
+                    var supportingClone = new WordDocument(path, FormatType.Docx);
+                    var label = $"supporting[{i + 1}/{supportingDocumentPaths.Count}]: {Path.GetFileName(path)}";
+
+                    var ok = RunMergeOnDocument(supportingClone, cases, additionalData, outcome, label);
+                    supportingClones.Add((label, supportingClone));
+
+                    if (!ok && !mainResult)
                     {
-                        var supportingClone = src.Clone();
-
-                        // Try the merge on this supporting document. If it reports missing
-                        // fields, abort the whole run and let the UI prompt.
-                        var ok = RunMergeOnDocument(supportingClone, cases, additionalData, outcome,
-                            $"supporting[{i + 1}/{supportingDocumentPaths.Count}]: {Path.GetFileName(path)}");
-                        if (!ok)
-                        {
-                            main.Close();
-                            return outcome;
-                        }
-
-                        AppendSupportingDocument(main, supportingClone);
-                        supportingClone.Close();
+                        // Both phases have produced missing fields - no point looking further,
+                        // the prompt will cover everything we've found so far.
+                        break;
                     }
                 }
+            }
+
+            // If either phase still has missing fields, return the prompt response WITHOUT
+            // appending anything. The user's answers will be supplied on the next call.
+            if (!mainResult || outcome.MissingFields.Count > 0)
+            {
+                foreach (var (_, supporting) in supportingClones)
+                {
+                    supporting.Close();
+                }
+                main.Close();
+                return outcome;
+            }
+
+            // Production: append every merged supporting document to the main merged doc.
+            foreach (var (_, supporting) in supportingClones)
+            {
+                AppendSupportingDocument(main, supporting);
+                supporting.Close();
             }
 
             outcome.MergedSfdt = ToSfdt(main);
@@ -416,6 +454,17 @@ namespace EJ2APIServices.Services
             var caseIds = cases.Select(c => c.CaseId).ToList();
             var caseNumbers = cases.Select(c => c.CaseNumber).ToList();
 
+            // For documents without a Case region (most supporting documents - they have
+            // only case-level fields like JudgeName), MergeField for the parent group
+            // never fires, so currentCaseId stays 0. Default to the FIRST selected case
+            // in that situation so missing-field keys are consistent with what the main
+            // template produced for the same case-level field. With FindSuppliedValue's
+            // CaseId=0 fallback, a single user answer applies to every case anyway.
+            int defaultCaseId = caseIds.Count > 0 ? caseIds[0] : 0;
+            string defaultCaseNumber = caseNumbers.Count > 0 ? caseNumbers[0] : "";
+            currentCaseId = defaultCaseId;
+            currentCaseNumber = defaultCaseNumber;
+
             doc.MailMerge.ClearFields = false; // keep unmerged fields until we know what is missing
 
             // Snapshot the missing-field count so we only inspect fields discovered
@@ -441,13 +490,44 @@ namespace EJ2APIServices.Services
             {
                 string groupName = args.GroupName ?? "";
                 int rowIndex = args.RowIndex < 0 ? 0 : args.RowIndex + 1;
-                if (string.Equals(groupName, CaseRegionName, StringComparison.OrdinalIgnoreCase))
-                {
-                    rowIndex = 0; // case-level field: no row differentiation
-                }
 
+                // Normalize field tagging so the prompt round-trip is consistent across
+                // the main template and every supporting document:
+                //
+                //   - Fields OUTSIDE any group (GroupName == ""): treat them as
+                //     case-level fields. Tag with GroupName="Case" and RowIndex=0 so the
+                //     same key is produced whether the field lives in the main template
+                //     or in a supporting document.
+                //
+                //   - Fields INSIDE the Case region (GroupName == "Case"): already
+                //     case-level. Force RowIndex=0 (no row differentiation within the
+                //     parent group).
+                //
+                //   - Fields INSIDE the Parties region (GroupName == "Parties"): tag with
+                //     the 1-based row index inside the group so the prompt can address a
+                //     specific party and so the supplied value applies only to that party.
+                //
+                // Missing fields with the same (caseId, groupName, rowIndex, fieldName)
+                // tuple collapse to one entry (AddMissing dedupes).
                 int caseIdForField = currentCaseId;
                 string caseNumberForField = currentCaseNumber;
+
+                if (string.IsNullOrEmpty(groupName)
+                    || string.Equals(groupName, CaseRegionName, StringComparison.OrdinalIgnoreCase))
+                {
+                    groupName = CaseRegionName;
+                    rowIndex = 0;
+                }
+                else
+                {
+                    // Parties group or any other group: keep the row index as reported.
+                    // If the case id is still the default (no Case region in this document),
+                    // the field is at the document level, not per-case, so we tag it
+                    // against the first case to stay consistent with how the main template
+                    // tags case-level fields. The user supplies the value once and the
+                    // FindSuppliedValue CaseId=0 fallback will not match here because the
+                    // field is in a child region - we tag with the default case explicitly.
+                }
 
                 var supplied = FindSuppliedValue(additionalData, caseIdForField, groupName, rowIndex, args.FieldName);
 

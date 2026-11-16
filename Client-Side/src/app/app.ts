@@ -31,6 +31,22 @@ interface SchemaGroupView {
 }
 
 /**
+ * Builds a human-readable label for a missing merge field. Case-level fields
+ * (groupName === 'Case' or empty, rowIndex === 0) are labeled simply as
+ * "FieldName (case CaseNumber)". Row-level fields inside a repeating group
+ * add "for item N in group GroupName".
+ */
+function buildMissingFieldLabel(m: { fieldName: string; groupName: string; rowIndex: number; caseNumber: string }): string {
+    const isCaseLevel = !m.groupName
+        || m.groupName === 'Case'
+        || m.rowIndex === 0;
+    const base = isCaseLevel
+        ? `${m.fieldName} (case ${m.caseNumber})`
+        : `${m.fieldName} for item ${m.rowIndex} in group ${m.groupName} (case ${m.caseNumber})`;
+    return base;
+}
+
+/**
  *
  * Startup: schema loads and the default main template ("Notice of Hearing" from
  * wwwroot/Templates) opens in the editor, so the user can immediately search, select
@@ -472,9 +488,7 @@ export class App implements AfterViewInit, OnDestroy {
             groupName: m.groupName,
             rowIndex: m.rowIndex,
             fieldName: m.fieldName,
-            label: m.groupName
-                ? `${m.fieldName} for item ${m.rowIndex} in group ${m.groupName} (case ${m.caseNumber})`
-                : `${m.fieldName} (case ${m.caseNumber})`,
+            label: buildMissingFieldLabel(m),
             value: ''
         })));
         this.showMissingDialog.set(true);
