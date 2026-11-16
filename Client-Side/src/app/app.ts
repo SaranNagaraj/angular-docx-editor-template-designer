@@ -251,7 +251,7 @@ function coerceTypedValue(type: FieldType, value: string): string {
                     </button>
                     <button type="button" class="poc-btn poc-btn-xsl" (click)="openXslDocument()"
                         [disabled]="convertingXsl()">
-                        {{ convertingXsl() ? 'Converting...' : 'XSL to Word Document' }}
+                        {{ convertingXsl() ? 'Converting...' : 'XSLT to Word Document' }}
                     </button>
                     <!-- Hidden file input: clicking Open PDF Document opens the browser's
                          native file menu dialog, which lets the user pick a PDF. The

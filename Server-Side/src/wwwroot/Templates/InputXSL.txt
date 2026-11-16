@@ -27,6 +27,10 @@
                 <xsl:value-of select="NoticeDate"/>
             </p>
             <p>
+                Hearing held in person:
+                <xsl:value-of select="HearingInPerson"/>
+            </p>
+            <p>
         ---------------------------------------------------------------------
             </p>
             <hr/>
