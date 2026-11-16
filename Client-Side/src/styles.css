@@ -318,6 +318,19 @@
     border-color: #9ca3af;
 }
 
+/* Reset - reloads the default template; subtle gray so it doesn't compete with the
+   primary actions. */
+.poc-btn-reset {
+    background: #f3f4f6;
+    color: #4b5563;
+    border-color: #d1d5db;
+}
+
+.poc-btn-reset:hover:not(:disabled) {
+    background: #e5e7eb;
+    color: #1f2937;
+}
+
 /* Preview Document - runs the merge and shows the result read-only. */
 .poc-btn-preview {
     background: #f59e0b;

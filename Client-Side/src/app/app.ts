@@ -199,6 +199,10 @@ function coerceTypedValue(type: FieldType, value: string): string {
                     <button type="button" class="poc-btn poc-btn-banner" (click)="exitPreview()">Back to Edit</button>
                 </div>
                 <div class="poc-action-toolbar">
+                    <button type="button" class="poc-btn poc-btn-reset" (click)="reset()"
+                        [disabled]="resetting()">
+                        {{ resetting() ? 'Resetting...' : 'Reset' }}
+                    </button>
                     <button type="button" class="poc-btn poc-btn-save" (click)="save()"
                         [disabled]="saving() || !editorHoldsTemplate() || !currentDocumentId">
                         {{ saving() ? 'Saving...' : 'Save Document' }}
@@ -422,6 +426,7 @@ export class App implements AfterViewInit, OnDestroy {
     public saving = signal(false);
     public exportingPdf = signal(false);
     public convertingPdf = signal(false);
+    public resetting = signal(false);
 
     /** Selected supporting documents to append after the merge. */
     public selectedAppendedIds = signal<Set<string>>(new Set<string>());
@@ -675,7 +680,46 @@ export class App implements AfterViewInit, OnDestroy {
      * Saves the template currently open in the editor back to the templates folder
      * (wwwroot/Templates). The editor document is serialized as SFDT and POSTed to
      * /api/templates/{id}/save; the server converts it back to DOCX and overwrites
-     * the file the user opened.
+    /**
+     * Resets the editor to the default main template ("Notice of Hearing" from the
+     * templates folder). Clears any in-progress merge / preview state and reloads
+     * the bundled default template.
+     */
+    public reset(): void {
+        if (this.resetting()) { return; }
+        this.resetting.set(true);
+        this.statusMessage.set('Resetting to the default template...');
+
+        // Drop every transient state so the editor and tracking signals agree with
+        // the freshly loaded default template.
+        this.previewMode.set(false);
+        this.applyEditorReadOnly(false);
+        this.previewedSfdt = null;
+        this.previewing.set(false);
+        this.generating.set(false);
+        this.exportingPdf.set(false);
+        this.statusMessage.set('');
+
+        this.api.getDefaultTemplate().then(sfdt => {
+            if (this.disposed) { return; }
+            this.openInEditor(sfdt);
+            // The editor now holds the default template again - it is savable, not a
+            // merged output.
+            this.currentDocumentId = this.mainTemplateId;
+            this.editorHoldsDefaultTemplate = true;
+            this.editorHoldsTemplate.set(true);
+            this.statusMessage.set('Reset to the default template.');
+        }).catch(() => {
+            this.statusMessage.set('Could not reload the default template.');
+        }).finally(() => {
+            this.resetting.set(false);
+        });
+    }
+
+    /**
+     * Saves the template currently open in the editor back to the templates folder:
+     * the server converts the SFDT payload back to DOCX and overwrites the file the
+     * user opened.
      */
     public save(): void {
         // The editor holds the assembled/merged output in preview mode - that is not
