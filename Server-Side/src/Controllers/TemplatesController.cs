@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using EJ2APIServices.Data;
 using EJ2APIServices.Models;
 using EJ2APIServices.Services;
@@ -10,12 +11,14 @@ namespace EJ2APIServices.Controllers
 {
     /// <summary>
     /// Supporting documents (templates) API:
-    /// GET /api/templates              - list available supporting documents
-    /// GET /api/templates/{id}         - load a supporting document as SFDT
+    /// GET  /api/templates              - list available templates
+    /// GET  /api/templates/{id}         - load a template as SFDT
+    /// POST /api/templates/{id}/save    - save the edited template back to disk
     ///
-    /// The supporting documents live in a folder on disk configured by
-    /// "TemplatesFolder" in appsettings.json (defaults to "App_Data/SupportingDocuments"
-    /// under the content root, which is auto-seeded on first run).
+    /// The templates live in a folder on disk configured by "TemplatesFolder" in
+    /// appsettings.json (defaults to "wwwroot/Templates" under the content root).
+    /// Saving writes the editor's SFDT payload back as a DOCX file in that same
+    /// folder, overwriting the file the user opened.
     /// </summary>
     [Route("api/[controller]")]
     public class TemplatesController : Controller
@@ -48,7 +51,7 @@ namespace EJ2APIServices.Controllers
         public IActionResult Get(string id)
         {
             var folder = GetFolder();
-            var path = SupportingDocumentRepository.GetSupportingFilePath(folder, id);
+            var path = SupportingDocumentRepository.ResolveTemplatePath(folder, id);
             if (path == null)
             {
                 return NotFound(new { message = $"Template '{id}' was not found." });
@@ -63,6 +66,49 @@ namespace EJ2APIServices.Controllers
             {
                 return StatusCode(500, new { message = $"Could not load template '{id}': {ex.Message}" });
             }
+        }
+
+        /// <summary>
+        /// Saves the template currently open in the editor back to the templates folder.
+        ///
+        /// The client sends the editor document serialized as SFDT. The server converts
+        /// it back to DOCX and overwrites the file it came from, so the template pack
+        /// in wwwroot/Templates always reflects the latest edits.
+        ///
+        /// Only files that already exist in the templates folder can be overwritten -
+        /// this endpoint does not create new templates.
+        /// </summary>
+        [HttpPost("{id}/save")]
+        public IActionResult Save(string id, [FromBody] SaveTemplateRequest request)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.Sfdt))
+            {
+                return BadRequest(new { message = "The document payload is empty." });
+            }
+
+            var folder = GetFolder();
+            var path = SupportingDocumentRepository.ResolveTemplatePath(folder, id);
+            if (path == null)
+            {
+                return NotFound(new { message = $"Template '{id}' was not found." });
+            }
+
+            try
+            {
+                DocumentMergeService.SaveSfdtAsDocx(request.Sfdt, path);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = $"Could not save template '{id}': {ex.Message}" });
+            }
+
+            var displayName = Path.GetFileNameWithoutExtension(path);
+            return Ok(new SaveTemplateResponse
+            {
+                Id = Path.GetFileName(path),
+                DisplayName = displayName,
+                Path = path
+            });
         }
     }
 }

@@ -195,6 +195,13 @@ namespace EJ2APIServices.Controllers
 
                 foreach (var id in request.AppendedDocumentIds)
                 {
+                    // The main template is the document being merged - appending it to
+                    // itself makes no sense, so it is never accepted as a supporting doc.
+                    if (string.Equals(id, SupportingDocumentRepository.DefaultMainTemplateFileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     var path = SupportingDocumentRepository.GetSupportingFilePath(folder, id);
                     if (path != null)
                     {

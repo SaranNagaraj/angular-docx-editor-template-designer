@@ -1,4 +1,4 @@
-import { Component, ViewChild, signal, AfterViewInit, OnDestroy } from '@angular/core';
+import { Component, ViewChild, signal, computed, AfterViewInit, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { CommonModule } from '@angular/common';
 import { DocumentEditorContainerComponent } from '@syncfusion/ej2-angular-documenteditor';
@@ -266,7 +266,7 @@ function coerceTypedValue(type: FieldType, value: string): string {
                 <h2>Documents to Merge</h2>
                 <p class="poc-muted">Select supporting documents. Their merge fields are filled with the case data and combined with the main template into a single document.</p>
                 <div class="poc-template-list">
-                    @for (t of templates(); track t.id) {
+                    @for (t of supportingDocuments(); track t.id) {
                         <label class="poc-template-item">
                             <input type="checkbox"
                                 [checked]="isAppendedSelected(t.id)"
@@ -274,17 +274,21 @@ function coerceTypedValue(type: FieldType, value: string): string {
                             <span>{{ t.displayName }}</span>
                         </label>
                     }
-                    <p class="poc-muted" *ngIf="templates().length === 0">No supporting documents available.</p>
+                    <p class="poc-muted" *ngIf="supportingDocuments().length === 0">No supporting documents available.</p>
                 </div>
                 <p class="poc-selected">Selected Documents : {{ selectedAppendedIds().size }}</p>
 
                 <div class="poc-divider"></div>
 
+                <button type="button" class="poc-btn poc-btn-block" (click)="save()"
+                    [disabled]="saving() || !editorHoldsTemplate() || !currentDocumentId">
+                    {{ saving() ? 'Saving...' : 'Save Document' }}
+                </button>
                 <button type="button" class="poc-btn poc-btn-block" (click)="preview()"
                     [disabled]="selectedIds().size === 0 || previewing() || generating()">
                     {{ previewing() ? 'Building Preview...' : 'Preview Document' }}
                 </button>
-                <button type="button" class="poc-btn poc-btn-primary" (click)="generate()"
+                <button type="button" class="poc-btn poc-btn-primary poc-btn-block" (click)="generate()"
                     [disabled]="selectedIds().size === 0 || generating()">
                     {{ generating() ? 'Generating...' : 'Generate Document' }}
                 </button>
@@ -372,12 +376,34 @@ export class App implements AfterViewInit, OnDestroy {
     private previewedSfdt: string | null = null;
     /** Mode to resume after the missing-field dialog is submitted (preview or generate). */
     private pendingMode: 'preview' | 'generate' | null = null;
+    /** File id of the default main template, resolved from the template list. */
+    private mainTemplateId = '';
+    /** True when the editor currently holds the default main template. */
+    private editorHoldsDefaultTemplate = false;
     public statusMessage = signal('');
 
     /** Supporting documents (templates) loaded from GET /api/templates on startup. */
     public templates = signal<SupportingDocument[]>([]);
     public selectedTemplateId = '';
     public loadingTemplate = signal(false);
+
+    /**
+     * The subset of templates that can be APPENDED to the merged output - i.e.
+     * everything except the default main template (which is the document being
+     * merged, so appending it to itself makes no sense).
+     */
+    public supportingDocuments = computed(() => this.templates().filter(t => !t.isMainTemplate));
+
+    /**
+     * Id (file name) of the template currently open in the editor. Tracked so the
+     * "Save Document" action knows which file in the templates folder to overwrite.
+     * Empty when the editor holds a document that is not a template (e.g. a merged
+     * output or a brand-new template authored from scratch).
+     */
+    public currentDocumentId = '';
+    /** True when the editor holds a template that can be saved back to disk. */
+    public editorHoldsTemplate = signal(false);
+    public saving = signal(false);
 
     /** Selected supporting documents to append after the merge. */
     public selectedAppendedIds = signal<Set<string>>(new Set<string>());
@@ -409,15 +435,26 @@ export class App implements AfterViewInit, OnDestroy {
         this.api.getDefaultTemplate().then(sfdt => {
             if (this.disposed) { return; }
             this.openInEditor(sfdt);
+            // The editor now holds the main template; mark it as the document that
+            // "Save Document" would overwrite. The exact file id is confirmed by the
+            // template list below (which arrives independently).
+            this.editorHoldsDefaultTemplate = true;
+            this.editorHoldsTemplate.set(true);
+            this.currentDocumentId = this.mainTemplateId;
         }).catch(() => {
             this.statusMessage.set('Could not load the default template from /api/template.');
         });
 
-        // ...and the supporting documents list (drives the "Documents to Merge" panel
-        // and the template picker dropdown).
+        // ...and the template list (drives the "Documents to Merge" panel and the
+        // template picker dropdown).
         this.api.listTemplates().then(items => {
             if (this.disposed) { return; }
             this.templates.set(items);
+            this.mainTemplateId = items.find(t => t.isMainTemplate)?.id ?? '';
+            // The default template may have loaded before this list did - resolve the id now.
+            if (this.editorHoldsDefaultTemplate && !this.currentDocumentId) {
+                this.currentDocumentId = this.mainTemplateId;
+            }
             // Default the dropdown to the first template so the UI is never empty.
             if (items.length > 0 && !this.selectedTemplateId) {
                 this.selectedTemplateId = items[0].id;
@@ -558,7 +595,7 @@ export class App implements AfterViewInit, OnDestroy {
     // ---------------- Template loader + supporting document selection ----------------
 
     /**
-     * Replaces the editor's current document with the chosen supporting document.
+     * Replaces the editor's current document with the chosen template.
      * Used by the "Template" dropdown at the top of the right panel.
      */
     public loadSelectedTemplate(): void {
@@ -568,6 +605,13 @@ export class App implements AfterViewInit, OnDestroy {
         this.api.getTemplate(id).then(sfdt => {
             if (this.disposed) { return; }
             this.openInEditor(sfdt);
+            // Remember which file the editor now holds so "Save Document" can
+            // overwrite it. Leaving preview mode makes sense here too.
+            this.currentDocumentId = id;
+            this.editorHoldsDefaultTemplate = false;
+            this.editorHoldsTemplate.set(true);
+            this.previewMode.set(false);
+            this.previewedSfdt = null;
             this.statusMessage.set(`Loaded template '${id}'.`);
         }).catch(() => {
             this.statusMessage.set(`Could not load template '${id}'.`);
@@ -578,6 +622,52 @@ export class App implements AfterViewInit, OnDestroy {
 
     public isAppendedSelected(id: string): boolean {
         return this.selectedAppendedIds().has(id);
+    }
+
+    // ---------------- Save ----------------
+
+    /**
+     * Saves the template currently open in the editor back to the templates folder
+     * (wwwroot/Templates). The editor document is serialized as SFDT and POSTed to
+     * /api/templates/{id}/save; the server converts it back to DOCX and overwrites
+     * the file the user opened.
+     */
+    public save(): void {
+        // The editor holds the assembled/merged output in preview mode - that is not
+        // a template and must not overwrite a template file.
+        if (this.previewMode()) {
+            this.statusMessage.set('Exit preview mode before saving a template.');
+            return;
+        }
+
+        // The editor may hold a generated (merged) document. Saving that over a
+        // template would replace the template with merged content.
+        if (!this.editorHoldsTemplate()) {
+            this.statusMessage.set('The editor holds a generated document, not a template. Load a template to save.');
+            return;
+        }
+
+        const id = this.currentDocumentId;
+        if (!id) {
+            this.statusMessage.set('Load a template before saving. There is no file to write to.');
+            return;
+        }
+
+        const sfdt = this.editor?.serialize();
+        if (!sfdt) {
+            this.statusMessage.set('There is nothing to save.');
+            return;
+        }
+
+        this.saving.set(true);
+        this.statusMessage.set('');
+        this.api.saveTemplate(id, sfdt).then(result => {
+            this.statusMessage.set(`Saved '${result.displayName}' to the templates folder.`);
+        }).catch(() => {
+            this.statusMessage.set(`Could not save '${id}'. Check the service log.`);
+        }).finally(() => {
+            this.saving.set(false);
+        });
     }
 
     public toggleAppendedSelection(id: string): void {
@@ -618,6 +708,9 @@ export class App implements AfterViewInit, OnDestroy {
             this.previewMode.set(false);
             this.openInEditor(this.previewedSfdt);
             this.previewedSfdt = null;
+            // The editor now holds the GENERATED output, not a template - saving it
+            // back would overwrite a template file with merged content.
+            this.editorHoldsTemplate.set(false);
             const appendedCount = this.selectedAppendedIds().size;
             const caseCount = this.selectedIds().size;
             const suffix = appendedCount > 0
@@ -633,19 +726,28 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     /**
-     * Drops preview mode and reloads the original template into the editor so the
-     * user can continue editing.
+     * Drops preview mode and reloads the template that was open before the preview
+     * so the user can continue editing it.
      */
     public exitPreview(): void {
         if (!this.previewMode()) { return; }
         this.previewMode.set(false);
         this.previewedSfdt = null;
-        this.api.getDefaultTemplate().then(sfdt => {
+
+        // Reload the template the user was editing before the preview started.
+        const id = this.currentDocumentId;
+        const load = id
+            ? this.api.getTemplate(id)
+            : this.api.getDefaultTemplate();
+
+        load.then(sfdt => {
             if (this.disposed) { return; }
             this.openInEditor(sfdt);
+            // The editor holds a template again, so it can be saved.
+            this.editorHoldsTemplate.set(true);
             this.statusMessage.set('Returned to template editing.');
         }).catch(() => {
-            this.statusMessage.set('Could not reload the default template.');
+            this.statusMessage.set('Could not reload the template.');
         });
     }
 
@@ -685,6 +787,9 @@ export class App implements AfterViewInit, OnDestroy {
                 this.previewMode.set(false);
                 this.previewedSfdt = null;
                 this.openInEditor(result.mergedSfdt);
+                // The editor now holds the GENERATED output, not a template - saving it
+                // back would overwrite a template file with merged content.
+                this.editorHoldsTemplate.set(false);
                 const appendedCount = this.selectedAppendedIds().size;
                 const caseCount = this.selectedIds().size;
                 const suffix = appendedCount > 0

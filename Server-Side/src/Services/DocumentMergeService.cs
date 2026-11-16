@@ -111,6 +111,51 @@ namespace EJ2APIServices.Services
         }
 
         /// <summary>
+        /// Converts the editor's SFDT payload back to a DOCX file and writes it to disk.
+        /// This is the inverse of LoadTemplateFromSfdt: the editor serializes the
+        /// document the user is editing as SFDT, and the server persists it as the
+        /// DOCX template in the templates folder.
+        ///
+        /// The write is atomic: the DOCX is first produced in a temporary file next to
+        /// the target and only then moved over it, so a failure part-way through never
+        /// leaves a truncated template behind.
+        /// </summary>
+        public static void SaveSfdtAsDocx(string sfdt, string docxPath)
+        {
+            var directory = Path.GetDirectoryName(docxPath);
+            var tempPath = Path.Combine(directory ?? string.Empty, Path.GetFileName(docxPath) + ".tmp");
+
+            try
+            {
+                WordDocument raw = EJ2WordDocument.Save(sfdt);
+                using (var ms = new MemoryStream())
+                {
+                    raw.Save(ms, FormatType.Docx);
+                    raw.Close();
+                    ms.Position = 0;
+
+                    using (var doc = new WordDocument(ms, FormatType.Docx))
+                    {
+                        doc.Save(tempPath, FormatType.Docx);
+                    }
+                }
+
+                if (File.Exists(tempPath))
+                {
+                    // File.Move with overwrite keeps the swap atomic on the same volume.
+                    File.Move(tempPath, docxPath, true);
+                }
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); } catch { /* best effort cleanup */ }
+                }
+            }
+        }
+
+        /// <summary>
         /// Builds the bundled sample Notice of Hearing template. Used on application start
         /// so the editor never opens blank, and as the fallback when no SFDT is sent.
         ///

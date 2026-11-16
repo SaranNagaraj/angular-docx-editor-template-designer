@@ -61,36 +61,43 @@ namespace EJ2APIServices.Data
         }
 
         /// <summary>
-        /// Lists every .docx in the folder except the default main template (which is
-        /// served separately via GET /api/template). Returned in stable order:
-        /// known supporting documents first (in their defined order), then any
-        /// additional files in alphabetical order.
+        /// Lists every .docx in the folder, INCLUDING the default main template
+        /// (which is also served separately via GET /api/template). Returned in stable
+        /// order: the main template first, then the known supporting documents (in
+        /// their defined order), then any additional files in alphabetical order.
         /// </summary>
         public static List<SupportingDocumentInfo> ListSupporting(string folder)
         {
+            var items = new List<SupportingDocumentInfo>();
             if (!Directory.Exists(folder))
             {
-                return new List<SupportingDocumentInfo>();
+                return items;
             }
 
             var files = Directory.EnumerateFiles(folder, "*.docx", SearchOption.TopDirectoryOnly)
                 .Select(Path.GetFileName)
                 .Where(name => !string.IsNullOrEmpty(name))
-                .Where(name => !string.Equals(name, DefaultMainTemplateFileName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            return files
+            var known = files
                 .Select(name =>
                 {
-                    var known = KnownSupportingDocuments.FirstOrDefault(s =>
+                    var match = KnownSupportingDocuments.FirstOrDefault(s =>
                         string.Equals(s.FileName, name, StringComparison.OrdinalIgnoreCase));
+                    var isMain = string.Equals(name, DefaultMainTemplateFileName, StringComparison.OrdinalIgnoreCase);
                     return new SupportingDocumentInfo
                     {
                         Id = name,
-                        DisplayName = known.FileName != null ? known.DisplayName : StripDocxExtension(name),
-                        Order = known.FileName != null ? known.Order : int.MaxValue
+                        DisplayName = isMain
+                            ? "Notice of Hearing"
+                            : (match.FileName != null ? match.DisplayName : StripDocxExtension(name)),
+                        Order = isMain ? 0 : (match.FileName != null ? match.Order : int.MaxValue),
+                        IsMainTemplate = isMain
                     };
                 })
+                .ToList();
+
+            return known
                 .OrderBy(d => d.Order)
                 .ThenBy(d => d.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -112,29 +119,48 @@ namespace EJ2APIServices.Data
         }
 
         /// <summary>
-        /// Returns the absolute path to the supporting document with the given id,
-        /// or null if no such file exists or the id is invalid (path-traversal
-        /// protection: id must be a plain file name with no path separators).
+        /// Resolves a template id (a plain .docx file name) to its absolute path inside
+        /// the configured folder. Works for the main template and for any supporting
+        /// document. Returns null when the id is invalid or the file does not exist.
+        ///
+        /// Path-traversal protection: the id must be a plain file name - no directory
+        /// separators and no parent-directory segments.
         /// </summary>
-        public static string GetSupportingFilePath(string folder, string id)
+        public static string ResolveTemplatePath(string folder, string id)
         {
             if (string.IsNullOrWhiteSpace(id))
             {
                 return null;
             }
 
-            if (id.IndexOfAny(new[] { '/', '\\' }) >= 0)
-            {
-                return null;
-            }
-
-            if (!Directory.Exists(folder))
+            if (id.IndexOfAny(new[] { '/', '\\' }) >= 0
+                || id.Contains("..", StringComparison.Ordinal)
+                || !id.EndsWith(".docx", StringComparison.OrdinalIgnoreCase))
             {
                 return null;
             }
 
             var path = Path.Combine(folder, id);
-            return File.Exists(path) ? path : null;
+            var fullFolder = Path.GetFullPath(folder);
+            var fullPath = Path.GetFullPath(path);
+
+            // Defence in depth: the resolved path must stay inside the templates folder.
+            if (!fullPath.StartsWith(fullFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return File.Exists(fullPath) ? fullPath : null;
+        }
+
+        /// <summary>
+        /// Returns the absolute path to the supporting document with the given id,
+        /// or null if no such file exists or the id is invalid (path-traversal
+        /// protection: id must be a plain file name with no path separators).
+        /// </summary>
+        public static string GetSupportingFilePath(string folder, string id)
+        {
+            return ResolveTemplatePath(folder, id);
         }
 
         private static string StripDocxExtension(string fileName)

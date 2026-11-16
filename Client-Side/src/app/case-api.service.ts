@@ -61,6 +61,15 @@ export interface SupportingDocument {
     id: string;
     displayName: string;
     order: number;
+    /** True for the default main template ("Notice of Hearing"). */
+    isMainTemplate?: boolean;
+}
+
+/** Result of a successful template save. */
+export interface SaveTemplateResult {
+    id: string;
+    displayName: string;
+    path: string;
 }
 
 export interface GenerateRequest {
@@ -117,6 +126,15 @@ export class CaseApiService {
     getTemplate(id: string): Promise<string> {
         return firstValueFrom(this.http.get<{ sfdt: string }>(`/api/templates/${encodeURIComponent(id)}`))
             .then(r => r.sfdt);
+    }
+
+    /**
+     * Saves the template currently open in the editor back to the templates folder.
+     * The server converts the SFDT payload back to DOCX and overwrites the file.
+     */
+    saveTemplate(id: string, sfdt: string): Promise<SaveTemplateResult> {
+        return firstValueFrom(this.http.post<SaveTemplateResult>(
+            `/api/templates/${encodeURIComponent(id)}/save`, { sfdt }));
     }
 
     /**

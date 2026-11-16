@@ -17,6 +17,14 @@ namespace EJ2APIServices.Models
         /// <summary>Order in which this document will be appended to the merged output.</summary>
         [JsonPropertyName("order")]
         public int Order { get; set; }
+
+        /// <summary>
+        /// True for the default main template ("Notice of Hearing"). The main template
+        /// is the document that gets mail-merged, so it is offered in the template
+        /// picker but NOT in the "Documents to Merge" list.
+        /// </summary>
+        [JsonPropertyName("isMainTemplate")]
+        public bool IsMainTemplate { get; set; }
     }
 
     /// <summary>
@@ -27,5 +35,32 @@ namespace EJ2APIServices.Models
     {
         [JsonPropertyName("sfdt")]
         public string Sfdt { get; set; }
+    }
+
+    /// <summary>
+    /// Body of POST /api/templates/{id}/save: the editor's current document
+    /// serialized as SFDT. The server converts it back to DOCX and writes it over
+    /// the file in the templates folder.
+    /// </summary>
+    public class SaveTemplateRequest
+    {
+        [JsonPropertyName("sfdt")]
+        public string Sfdt { get; set; }
+    }
+
+    /// <summary>
+    /// Result of a successful save.
+    /// </summary>
+    public class SaveTemplateResponse
+    {
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        [JsonPropertyName("displayName")]
+        public string DisplayName { get; set; }
+
+        /// <summary>Absolute path of the written file (server-side detail).</summary>
+        [JsonPropertyName("path")]
+        public string Path { get; set; }
     }
 }
