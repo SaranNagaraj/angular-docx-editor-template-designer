@@ -268,6 +268,35 @@
     color: #dc2626;
 }
 
+/* Preview-mode banner above the editor */
+.poc-preview-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #fef3c7;
+    border-bottom: 1px solid #fcd34d;
+    color: #78350f;
+    font-size: 0.8125rem;
+}
+
+.poc-preview-banner span {
+    flex: 1;
+    min-width: 0;
+}
+
+.poc-btn-banner {
+    background: #fff;
+    color: #78350f;
+    border-color: #fcd34d;
+    white-space: nowrap;
+}
+
+.poc-btn-banner:hover {
+    background: #fde68a;
+}
+
 .poc-dialog-actions {
     display: flex;
     justify-content: flex-end;

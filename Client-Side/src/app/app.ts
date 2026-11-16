@@ -194,11 +194,16 @@ function coerceTypedValue(type: FieldType, value: string): string {
 
             <!-- CENTER: Document Editor (Ribbon mode + Mail Merge tab) -->
             <section class="poc-editor">
+                <div class="poc-preview-banner" *ngIf="previewMode()">
+                    <span><strong>Preview mode.</strong> The editor is read-only. Review the assembled document, then click <strong>Generate Document</strong> to finalize or <strong>Back to Edit</strong> to return to the template.</span>
+                    <button type="button" class="poc-btn poc-btn-banner" (click)="exitPreview()">Back to Edit</button>
+                </div>
                 <ejs-documenteditorcontainer
                     #container
                     height="100%"
                     style="display:block"
-                    [enableToolbar]="true"
+                    [enableToolbar]="!previewMode()"
+                    [restrictEditing]="previewMode()"
                     [toolbarMode]="'Ribbon'"
                     serviceUrl="/api/documenteditor/">
                 </ejs-documenteditorcontainer>
@@ -275,6 +280,10 @@ function coerceTypedValue(type: FieldType, value: string): string {
 
                 <div class="poc-divider"></div>
 
+                <button type="button" class="poc-btn poc-btn-block" (click)="preview()"
+                    [disabled]="selectedIds().size === 0 || previewing() || generating()">
+                    {{ previewing() ? 'Building Preview...' : 'Preview Document' }}
+                </button>
                 <button type="button" class="poc-btn poc-btn-primary" (click)="generate()"
                     [disabled]="selectedIds().size === 0 || generating()">
                     {{ generating() ? 'Generating...' : 'Generate Document' }}
@@ -356,6 +365,13 @@ export class App implements AfterViewInit, OnDestroy {
     public searched = signal(false);
     public selectedIds = signal<Set<number>>(new Set<number>());
     public generating = signal(false);
+    public previewing = signal(false);
+    /** True when the editor is showing the assembled output in viewer/read-only mode. */
+    public previewMode = signal(false);
+    /** Cached SFDT of the last successful preview so Generate can reuse it without re-merging. */
+    private previewedSfdt: string | null = null;
+    /** Mode to resume after the missing-field dialog is submitted (preview or generate). */
+    private pendingMode: 'preview' | 'generate' | null = null;
     public statusMessage = signal('');
 
     /** Supporting documents (templates) loaded from GET /api/templates on startup. */
@@ -573,18 +589,72 @@ export class App implements AfterViewInit, OnDestroy {
     // ---------------- Generate ----------------
 
     /**
-     * Serialize the current editor document as SFDT, merge the selected cases on the
+     * Preview click: run the mail merge using the selected case data + supporting
+     * documents, then display the assembled SFDT in the editor in viewer/read-only
+     * mode. The user can review and either click Generate Document to finalize or
+     * Back to Edit to return to the template.
+     *
+     * The merge call is identical to Generate - same endpoint, same data - only the
+     * editor's mode differs.
+     */
+    public preview(): void {
+        if (this.selectedIds().size === 0) { return; }
+        this.previewing.set(true);
+        this.generating.set(true);
+        this.statusMessage.set('');
+        this.runMerge('preview', []);
+    }
+
+    /**
+     * Final click: serialise the current editor document, POST to /api/generate on the
      * server, and open the merged SFDT back in the editor. The result is previewed,
      * never downloaded.
      */
     public generate(): void {
         if (this.selectedIds().size === 0) { return; }
+        // If a preview is already showing the assembled document, reuse the cached SFDT
+        // instead of re-running the merge - the user has reviewed the content already.
+        if (this.previewMode() && this.previewedSfdt) {
+            this.previewMode.set(false);
+            this.openInEditor(this.previewedSfdt);
+            this.previewedSfdt = null;
+            const appendedCount = this.selectedAppendedIds().size;
+            const caseCount = this.selectedIds().size;
+            const suffix = appendedCount > 0
+                ? ` and merged ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
+                : '';
+            this.statusMessage.set(`Generated ${caseCount} case(s) into one document${suffix}.`);
+            return;
+        }
+
         this.generating.set(true);
         this.statusMessage.set('');
-        this.runGenerate([]);
+        this.runMerge('generate', []);
     }
 
-    private runGenerate(additionalMergeData: AdditionalMergeValue[]): void {
+    /**
+     * Drops preview mode and reloads the original template into the editor so the
+     * user can continue editing.
+     */
+    public exitPreview(): void {
+        if (!this.previewMode()) { return; }
+        this.previewMode.set(false);
+        this.previewedSfdt = null;
+        this.api.getDefaultTemplate().then(sfdt => {
+            if (this.disposed) { return; }
+            this.openInEditor(sfdt);
+            this.statusMessage.set('Returned to template editing.');
+        }).catch(() => {
+            this.statusMessage.set('Could not reload the default template.');
+        });
+    }
+
+    /**
+     * Shared merge call used by both preview and generate. Mode controls whether the
+     * result is loaded into the editor in viewer mode (preview) or as the final
+     * editable document (generate).
+     */
+    private runMerge(mode: 'preview' | 'generate', additionalMergeData: AdditionalMergeValue[]): void {
         const templateSfdt = this.editor?.serialize();
         const request = {
             caseIds: Array.from(this.selectedIds()),
@@ -594,25 +664,43 @@ export class App implements AfterViewInit, OnDestroy {
         };
 
         this.api.generate(request).then(result => {
+            this.previewing.set(false);
             this.generating.set(false);
             if (result.kind === 'requires-input') {
-                this.openMissingDialog(result.missingFields);
+                this.openMissingDialog(result.missingFields, mode);
                 return;
             }
-            this.openInEditor(result.mergedSfdt);
-            const appendedCount = this.selectedAppendedIds().size;
-            const caseCount = this.selectedIds().size;
-            const suffix = appendedCount > 0
-                ? ` and merged ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
-                : '';
-            this.statusMessage.set(`Merged ${caseCount} case(s) into one document${suffix}.`);
+
+            if (mode === 'preview') {
+                this.previewedSfdt = result.mergedSfdt;
+                this.previewMode.set(true);
+                this.openInEditor(result.mergedSfdt);
+                const appendedCount = this.selectedAppendedIds().size;
+                const caseCount = this.selectedIds().size;
+                const suffix = appendedCount > 0
+                    ? ` and merged ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
+                    : '';
+                this.statusMessage.set(`Preview ready: merged ${caseCount} case(s)${suffix}. Review and Generate to finalize.`);
+            } else {
+                this.previewMode.set(false);
+                this.previewedSfdt = null;
+                this.openInEditor(result.mergedSfdt);
+                const appendedCount = this.selectedAppendedIds().size;
+                const caseCount = this.selectedIds().size;
+                const suffix = appendedCount > 0
+                    ? ` and merged ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
+                    : '';
+                this.statusMessage.set(`Generated ${caseCount} case(s) into one document${suffix}.`);
+            }
         }).catch(() => {
+            this.previewing.set(false);
             this.generating.set(false);
-            this.statusMessage.set('Generation failed. Check the service log.');
+            this.statusMessage.set('Merge failed. Check the service log.');
         });
     }
 
-    private openMissingDialog(missing: MissingField[]): void {
+    private openMissingDialog(missing: MissingField[], mode: 'preview' | 'generate'): void {
+        this.pendingMode = mode;
         this.missingInputs.set(missing.map(m => {
             // Resolve the type from the static field-metadata map; unknown fields
             // (custom fields typed in via "Add Custom Merge Field") default to string.
@@ -635,6 +723,7 @@ export class App implements AfterViewInit, OnDestroy {
     public cancelMissingDialog(): void {
         this.showMissingDialog.set(false);
         this.missingInputs.set([]);
+        this.pendingMode = null;
         this.statusMessage.set('Generation cancelled.');
     }
 
@@ -682,8 +771,14 @@ export class App implements AfterViewInit, OnDestroy {
                 value: coerceTypedValue(item.type, item.value)
             }));
 
+        // Preserve the originating action: if the user opened the dialog from a
+        // Preview click, stay in preview mode after the second pass resolves the
+        // missing fields; if from Generate, finalize the document.
+        const mode: 'preview' | 'generate' = this.pendingMode ?? (this.previewing() ? 'preview' : 'generate');
+        this.pendingMode = null;
+
         this.showMissingDialog.set(false);
         this.generating.set(true);
-        this.runGenerate(additionalMergeData);
+        this.runMerge(mode, additionalMergeData);
     }
 }
