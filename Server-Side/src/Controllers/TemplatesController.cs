@@ -138,10 +138,10 @@ namespace EJ2APIServices.Controllers
             var folder = GetFolder();
             var path = SupportingDocumentRepository.ResolveTemplatePath(folder, id);
 
-            // The file may not exist yet (the main template has never been saved).
-            // Resolve the target path WITHOUT requiring the file to be present, but
-            // still apply the same path-traversal and extension checks.
-            bool creating = false;
+            // The file may not exist yet (the main template has never been saved, or
+            // the user is saving a generated document under a new name). Resolve the
+            // target path WITHOUT requiring the file to be present, but still apply
+            // the same path-traversal and extension checks.
             if (path == null)
             {
                 path = SupportingDocumentRepository.ResolveTemplateTargetPath(folder, id);
@@ -149,7 +149,12 @@ namespace EJ2APIServices.Controllers
                 {
                     return NotFound(new { message = $"Template '{id}' could not be saved." });
                 }
-                creating = true;
+            }
+
+            // Make sure the templates folder exists before writing into it.
+            if (!Directory.Exists(folder))
+            {
+                Directory.CreateDirectory(folder);
             }
 
             try

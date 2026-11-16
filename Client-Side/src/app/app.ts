@@ -234,7 +234,8 @@ function coerceTypedValue(type: FieldType, value: string): string {
                         {{ resetting() ? 'Resetting...' : 'Reset' }}
                     </button>
                     <button type="button" class="poc-btn poc-btn-save" (click)="save()"
-                        [disabled]="saving() || !editorHoldsTemplate() || !currentDocumentId || !documentDirty()">
+                        [disabled]="saving() || !editorHoldsTemplate() || !saveTargetId || !documentDirty()"
+                        [title]="saveTargetLabel ? ('Save to ' + saveTargetLabel) : 'No file to save to'">
                         {{ saving() ? 'Saving...' : (documentDirty() ? 'Save Document *' : 'Save Document') }}
                     </button>
                     <button type="button" class="poc-btn poc-btn-preview" (click)="preview()"
@@ -462,6 +463,14 @@ export class App implements AfterViewInit, OnDestroy {
      * output or a brand-new template authored from scratch).
      */
     public currentDocumentId = '';
+    /**
+     * File the "Save Document" action writes to. Usually the same as
+     * currentDocumentId, but after a mail merge it points at a separate output file
+     * so the merged result is saved WITHOUT overwriting the source template.
+     */
+    public saveTargetId = '';
+    /** Display name of the save target, used in the status message and the tooltip. */
+    public saveTargetLabel = '';
     /** True when the editor holds a template that can be saved back to disk. */
     public editorHoldsTemplate = signal(false);
     /** True when the editor content differs from the last loaded/saved state. */
@@ -525,8 +534,7 @@ export class App implements AfterViewInit, OnDestroy {
             // reported file name (creating it if it does not exist yet). Older
             // backends do not send fileName - fall back to the constant default.
             this.editorHoldsDefaultTemplate = true;
-            this.editorHoldsTemplate.set(true);
-            this.currentDocumentId = result.fileName || this.mainTemplateId || 'Notice of Hearing.docx';
+            this.setSaveTarget(result.fileName || this.mainTemplateId || 'Notice of Hearing.docx');
             this.markClean();
         }).catch(() => {
             this.statusMessage.set('Could not load the default template from /api/template.');
@@ -541,7 +549,7 @@ export class App implements AfterViewInit, OnDestroy {
             // Backfill the save target if the default template loaded before the list
             // and the server did not report a file name.
             if (this.editorHoldsDefaultTemplate && !this.currentDocumentId) {
-                this.currentDocumentId = this.mainTemplateId || 'Notice of Hearing.docx';
+                this.setSaveTarget(this.mainTemplateId || 'Notice of Hearing.docx');
             }
             // Default the dropdown to the first template so the UI is never empty.
             if (items.length > 0 && !this.selectedTemplateId) {
@@ -659,6 +667,37 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     /**
+     * Sets the file that "Save Document" writes to, and enables the action for the
+     * document currently in the editor.
+     *
+     * @param id      file name inside the templates folder (empty = not savable)
+     * @param label   display name used in the status message
+     * @param savable whether the editor content may be written to that file
+     */
+    private setSaveTarget(id: string, label?: string, savable = true): void {
+        this.saveTargetId = id;
+        this.saveTargetLabel = label ?? id;
+        this.currentDocumentId = id;
+        this.editorHoldsTemplate.set(savable && !!id);
+    }
+
+    /**
+     * File name used when saving a generated (mail-merged) document. Derived from the
+     * template it was merged from, e.g. "Notice of Hearing.docx" ->
+     * "Notice of Hearing (Merged).docx". The merged result is kept in its own file
+     * so the source template - with its merge fields - stays intact.
+     *
+     * When the current document is already a merged output (a second generate), the
+     * source template name is recovered from it so the name does not accumulate
+     * "(Merged)" suffixes.
+     */
+    private buildMergedOutputFileName(): string {
+        const source = this.currentDocumentId || 'Notice of Hearing.docx';
+        const stem = source.replace(/\.docx$/i, '').replace(/\s*\(Merged\)$/i, '');
+        return `${stem} (Merged).docx`;
+    }
+
+    /**
      * Lock or unlock the editor's read-only state. The container's `restrictEditing`
      * input only toggles the Restrict-Editing pane - the editor's actual editing
      * permission is controlled by `documentEditor.isReadOnly`. Every preview-mode
@@ -761,9 +800,8 @@ export class App implements AfterViewInit, OnDestroy {
             this.openInEditor(sfdt);
             // Remember which file the editor now holds so "Save Document" can
             // overwrite it. Leaving preview mode makes sense here too.
-            this.currentDocumentId = id;
             this.editorHoldsDefaultTemplate = false;
-            this.editorHoldsTemplate.set(true);
+            this.setSaveTarget(id);
             this.previewMode.set(false);
             this.previewedSfdt = null;
             this.statusMessage.set(`Loaded template '${id}'.`);
@@ -780,10 +818,6 @@ export class App implements AfterViewInit, OnDestroy {
 
     // ---------------- Save ----------------
 
-    /**
-     * Saves the template currently open in the editor back to the templates folder
-     * (wwwroot/Templates). The editor document is serialized as SFDT and POSTed to
-     * /api/templates/{id}/save; the server converts it back to DOCX and overwrites
     /**
      * Resets the editor to the default main template ("Notice of Hearing" from the
      * templates folder). Clears any in-progress merge / preview state and reloads
@@ -809,9 +843,8 @@ export class App implements AfterViewInit, OnDestroy {
             this.openInEditor(result.sfdt);
             // The editor now holds the default template again - it is savable, not a
             // merged output.
-            this.currentDocumentId = result.fileName || this.mainTemplateId || 'Notice of Hearing.docx';
             this.editorHoldsDefaultTemplate = true;
-            this.editorHoldsTemplate.set(true);
+            this.setSaveTarget(result.fileName || this.mainTemplateId || 'Notice of Hearing.docx');
             this.statusMessage.set('Reset to the default template.');
         }).catch(() => {
             this.statusMessage.set('Could not reload the default template.');
@@ -826,21 +859,21 @@ export class App implements AfterViewInit, OnDestroy {
      * user opened.
      */
     public save(): void {
-        // The editor holds the assembled/merged output in preview mode - that is not
-        // a template and must not overwrite a template file.
+        // The editor holds the assembled/merged output in preview mode - it is
+        // read-only there and must not be written to a file.
         if (this.previewMode()) {
-            this.statusMessage.set('Exit preview mode before saving a template.');
+            this.statusMessage.set('Exit preview mode before saving.');
             return;
         }
 
-        // The editor may hold a generated (merged) document. Saving that over a
-        // template would replace the template with merged content.
+        // The editor may hold a document that has no file behind it (a PDF or XSL
+        // conversion). Those are not savable.
         if (!this.editorHoldsTemplate()) {
-            this.statusMessage.set('The editor holds a generated document, not a template. Load a template to save.');
+            this.statusMessage.set('This document has no file to save to. Load a template to save.');
             return;
         }
 
-        const id = this.currentDocumentId;
+        const id = this.saveTargetId || this.currentDocumentId;
         if (!id) {
             this.statusMessage.set('Load a template before saving. There is no file to write to.');
             return;
@@ -905,9 +938,8 @@ export class App implements AfterViewInit, OnDestroy {
             this.openInEditor(sfdt);
             // The editor holds a converted document, not a template from the
             // templates folder - Save Document must not overwrite one.
-            this.currentDocumentId = '';
             this.editorHoldsDefaultTemplate = false;
-            this.editorHoldsTemplate.set(false);
+            this.setSaveTarget('', '', false);
             this.previewMode.set(false);
             this.previewedSfdt = null;
             this.statusMessage.set(`Converted '${file.name}' to Word and opened it in the editor.`);
@@ -945,9 +977,8 @@ export class App implements AfterViewInit, OnDestroy {
             // The editor holds a freshly generated template - it is not backed by a
             // file in the templates folder yet, so Save Document stays disabled until
             // the user saves it to a real template.
-            this.currentDocumentId = '';
             this.editorHoldsDefaultTemplate = false;
-            this.editorHoldsTemplate.set(false);
+            this.setSaveTarget('', '', false);
             this.previewMode.set(false);
             this.previewedSfdt = null;
             this.statusMessage.set('Converted the XSL template to a Word document and opened it in the editor.');
@@ -1093,8 +1124,10 @@ export class App implements AfterViewInit, OnDestroy {
         load.then(sfdt => {
             if (this.disposed) { return; }
             this.openInEditor(sfdt);
-            // The editor holds a template again, so it can be saved.
+            // The editor holds a template again, so it can be saved. Restore the save
+            // target to the template it was merged from.
             this.editorHoldsTemplate.set(true);
+            this.setSaveTarget(id || this.mainTemplateId || 'Notice of Hearing.docx');
             this.statusMessage.set('Returned to template editing.');
         }).catch(() => {
             this.statusMessage.set('Could not reload the template.');
@@ -1137,9 +1170,15 @@ export class App implements AfterViewInit, OnDestroy {
                 this.previewMode.set(false);
                 this.previewedSfdt = null;
                 this.openInEditor(result.mergedSfdt);
-                // The editor now holds the GENERATED output, not a template - saving it
-                // back would overwrite a template file with merged content.
-                this.editorHoldsTemplate.set(false);
+                // The editor now holds the GENERATED output. It is savable, but to its
+                // OWN file - saving over the source template would destroy the
+                // template's merge fields. The output file name is derived from the
+                // template it was merged from.
+                this.editorHoldsDefaultTemplate = false;
+                this.setSaveTarget(this.buildMergedOutputFileName());
+                // The merged document differs from what is on disk - mark it dirty so
+                // the Save Document action is available straight away.
+                this.documentDirty.set(true);
                 const appendedCount = this.selectedAppendedIds().size;
                 const caseCount = this.selectedIds().size;
                 const suffix = appendedCount > 0
