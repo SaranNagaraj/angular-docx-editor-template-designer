@@ -61,9 +61,7 @@ namespace EJ2APIServices.Controllers
                     ["CaseNumber"]  = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Case Number" },
                     ["CaseCaption"] = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Case Caption" },
                     ["NoticeDate"]  = new FieldSchemaEntry { Type = FieldTypes.Date,    Label = "Notice Date" },
-                    ["JudgeName"]   = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Presiding Judge" },
-                    ["FilingFee"]   = new FieldSchemaEntry { Type = FieldTypes.Number,  Label = "Filing Fee" },
-                    ["SealedCase"]  = new FieldSchemaEntry { Type = FieldTypes.Boolean, Label = "Sealed Case" }
+                    ["JudgeName"]   = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Presiding Judge" }
                 },
                 Parties = new Dictionary<string, FieldSchemaEntry>
                 {
