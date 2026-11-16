@@ -241,6 +241,7 @@ function coerceTypedValue(type: FieldType, value: string): string {
                     [enableToolbar]="!previewMode()"
                     [toolbarMode]="'Ribbon'"
                     (created)="onEditorCreated()"
+                    (contentChange)="onContentChange()"
                     serviceUrl="/api/documenteditor/">
                 </ejs-documenteditorcontainer>
             </section>
@@ -457,6 +458,8 @@ export class App implements AfterViewInit, OnDestroy {
     private disposed = false;
     /** True while a document is being opened - suppresses dirty tracking. */
     private loadingDocument = false;
+    /** Handle of the settle timer that ends the load-suppression window. */
+    private loadingSettleHandle: number | null = null;
 
     constructor(private api: CaseApiService) {
         // Mirror the previewMode signal onto the editor's actual read-only state.
@@ -528,18 +531,21 @@ export class App implements AfterViewInit, OnDestroy {
 
     /**
      * The EJ2 container fires `created` once the inner DocumentEditor exists. This is
-     * the earliest reliable point to subscribe to contentChange - subscribing in
-     * ngAfterViewInit silently no-ops because documentEditor is still undefined
-     * there, which left the Save Document button permanently disabled.
+     * the earliest reliable point to correct the editor's default read-only state
+     * (it defaults to read-only).
      */
     public onEditorCreated(): void {
-        const contentChange = this.container?.documentEditor?.contentChange;
-        if (contentChange) {
-            contentChange.subscribe?.(() => this.markDirty());
-        }
         // The editor just became available; make sure its read-only state matches
         // the current preview mode (it defaults to read-only).
         this.applyEditorReadOnly(this.previewMode());
+    }
+
+    /**
+     * Bound to the container's (contentChange) output. Fires for every edit in the
+     * document - enabling the Save Document action.
+     */
+    public onContentChange(): void {
+        this.markDirty();
     }
 
     private buildSchemaGroups(schema: FieldSchema): SchemaGroupView[] {
@@ -590,16 +596,19 @@ export class App implements AfterViewInit, OnDestroy {
         const editor = this.editor;
         if (!editor) { return; }
         // Suppress dirty tracking while the document loads: editor.open() can fire
-        // contentChange asynchronously for the initial render, which would otherwise
-        // immediately re-dirty a freshly loaded document.
+        // contentChange for the initial render, sometimes on a later task (after
+        // layout), which would otherwise re-dirty a freshly loaded document. A short
+        // settle window is robust against both sync and async firing.
         this.loadingDocument = true;
-        try {
-            editor.open(sfdt);
-        } finally {
-            // Release on the next microtask so any open()-triggered contentChange
-            // events (fired synchronously or in the same task) are ignored.
-            Promise.resolve().then(() => { this.loadingDocument = false; });
+        if (this.loadingSettleHandle !== null) {
+            clearTimeout(this.loadingSettleHandle);
         }
+        this.loadingSettleHandle = window.setTimeout(() => {
+            this.loadingDocument = false;
+            this.loadingSettleHandle = null;
+        }, 300);
+
+        editor.open(sfdt);
         // The editor's read-only state may have been reset by open(). Re-apply the
         // current preview-mode setting so a freshly opened document stays in the
         // expected read-only / editable state.
