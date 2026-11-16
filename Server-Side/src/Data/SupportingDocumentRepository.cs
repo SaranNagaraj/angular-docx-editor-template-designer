@@ -41,10 +41,31 @@ namespace EJ2APIServices.Data
         }
 
         /// <summary>
+        /// The file name of the main template. Configurable through the
+        /// "MainTemplateFileName" setting so the sample works with any template pack;
+        /// falls back to the built-in default when not configured.
+        /// </summary>
+        public static string GetMainTemplateFileName(string configuredFileName)
+        {
+            return string.IsNullOrWhiteSpace(configuredFileName)
+                ? DefaultMainTemplateFileName
+                : configuredFileName.Trim();
+        }
+
+        /// <summary>
         /// Lists every .docx in the folder: the main template first (if present), then
         /// all other files alphabetically. The folder is read on every call.
+        ///
+        /// When the main template file does not exist yet, a main-template entry is
+        /// still returned - flagged with IsMainTemplate and Exists=false - so the UI
+        /// knows the document it opened is the main template and can save it to disk
+        /// (creating the file) instead of leaving the Save action permanently
+        /// disabled.
         /// </summary>
-        public static List<SupportingDocumentInfo> ListSupporting(string folder)
+        public static List<SupportingDocumentInfo> ListSupporting(
+            string folder,
+            string mainTemplateFileName = null,
+            bool includeMissingMainTemplate = false)
         {
             var items = new List<SupportingDocumentInfo>();
             if (!Directory.Exists(folder))
@@ -58,10 +79,12 @@ namespace EJ2APIServices.Data
                 .Where(n => !string.IsNullOrEmpty(n) && !n.StartsWith("~$", StringComparison.Ordinal))
                 .ToList();
 
-            return files
+            var mainName = GetMainTemplateFileName(mainTemplateFileName);
+
+            var result = files
                 .Select(name =>
                 {
-                    var isMain = string.Equals(name, DefaultMainTemplateFileName, StringComparison.OrdinalIgnoreCase);
+                    var isMain = string.Equals(name, mainName, StringComparison.OrdinalIgnoreCase);
                     return new SupportingDocumentInfo
                     {
                         Id = name,
@@ -73,18 +96,72 @@ namespace EJ2APIServices.Data
                 .OrderBy(d => d.Order)
                 .ThenBy(d => d.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+
+            // The main template file may not exist yet (e.g. the folder holds only the
+            // supporting documents). Still report it so the UI can treat the opened
+            // document as the main template and offer to save it - creating the file.
+            bool mainExists = result.Any(d => d.IsMainTemplate);
+            if (!mainExists && includeMissingMainTemplate)
+            {
+                result.Insert(0, new SupportingDocumentInfo
+                {
+                    Id = mainName,
+                    DisplayName = StripDocxExtension(mainName),
+                    IsMainTemplate = true,
+                    Order = 0,
+                    Exists = false
+                });
+            }
+
+            return result;
         }
 
-        /// <summary>Path to the main template, or null if the file does not exist.</summary>
-        public static string GetMainTemplatePath(string folder)
+        /// <summary>
+        /// Path to the main template, or null if the file does not exist.
+        /// </summary>
+        public static string GetMainTemplatePath(string folder, string mainTemplateFileName = null)
         {
             if (!Directory.Exists(folder))
             {
                 return null;
             }
 
-            var path = Path.Combine(folder, DefaultMainTemplateFileName);
+            var path = Path.Combine(folder, GetMainTemplateFileName(mainTemplateFileName));
             return File.Exists(path) ? path : null;
+        }
+
+        /// <summary>
+        /// Resolves a template id to the path it SHOULD have inside the folder, without
+        /// requiring the file to exist. Used when saving a template for the first time
+        /// (the main template may never have been written to disk).
+        ///
+        /// The same path-traversal and extension checks as ResolveTemplatePath apply:
+        /// the id must be a plain .docx file name and the resolved path must stay
+        /// inside the templates folder.
+        /// </summary>
+        public static string ResolveTemplateTargetPath(string folder, string id)
+        {
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return null;
+            }
+
+            if (id.IndexOfAny(new[] { '/', '\\' }) >= 0
+                || id.Contains("..", StringComparison.Ordinal)
+                || !id.EndsWith(".docx", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var fullFolder = Path.GetFullPath(folder);
+            var fullPath = Path.GetFullPath(Path.Combine(folder, id));
+
+            if (!fullPath.StartsWith(fullFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return fullPath;
         }
 
         /// <summary>
