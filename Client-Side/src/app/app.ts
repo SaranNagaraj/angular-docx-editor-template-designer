@@ -222,6 +222,10 @@ function coerceTypedValue(type: FieldType, value: string): string {
                         [disabled]="convertingPdf()">
                         {{ convertingPdf() ? 'Converting...' : 'Open PDF Document' }}
                     </button>
+                    <button type="button" class="poc-btn poc-btn-xsl" (click)="openXslDocument()"
+                        [disabled]="convertingXsl()">
+                        {{ convertingXsl() ? 'Converting...' : 'XSL to Word Document' }}
+                    </button>
                     <!-- Hidden file input: clicking Open PDF Document opens the browser's
                          native file menu dialog, which lets the user pick a PDF. The
                          input is given an id so the click handler can address it directly
@@ -434,6 +438,7 @@ export class App implements AfterViewInit, OnDestroy {
     public saving = signal(false);
     public exportingPdf = signal(false);
     public convertingPdf = signal(false);
+    public convertingXsl = signal(false);
     public resetting = signal(false);
 
     /** Selected supporting documents to append after the merge. */
@@ -824,6 +829,46 @@ export class App implements AfterViewInit, OnDestroy {
             this.statusMessage.set(message);
         }).finally(() => {
             this.convertingPdf.set(false);
+        });
+    }
+
+    // ---------------- XSL to Word Document ----------------
+
+    /**
+     * Converts the XSL/XSLT stylesheet from the templates folder (InputXSL.txt) into
+     * a Word mail-merge template and opens it in the editor. The server turns the
+     * stylesheet's xsl:for-each into merge regions and xsl:value-of into merge
+     * fields, so the result works with the same mail-merge pipeline as the other
+     * templates.
+     */
+    public openXslDocument(): void {
+        if (this.convertingXsl()) { return; }
+        this.convertingXsl.set(true);
+        this.statusMessage.set('Converting the XSL template to a Word document...');
+
+        this.api.convertXslToWord().then(sfdt => {
+            if (this.disposed) { return; }
+            this.openInEditor(sfdt);
+            // The editor holds a freshly generated template - it is not backed by a
+            // file in the templates folder yet, so Save Document stays disabled until
+            // the user saves it to a real template.
+            this.currentDocumentId = '';
+            this.editorHoldsDefaultTemplate = false;
+            this.editorHoldsTemplate.set(false);
+            this.previewMode.set(false);
+            this.previewedSfdt = null;
+            this.statusMessage.set('Converted the XSL template to a Word document and opened it in the editor.');
+        }).catch((err: unknown) => {
+            let message: string;
+            if (err && typeof err === 'object' && 'error' in err) {
+                const inner = (err as { error?: { message?: string } }).error;
+                message = inner?.message ?? 'Could not convert the XSL template.';
+            } else {
+                message = 'Could not convert the XSL template.';
+            }
+            this.statusMessage.set(message);
+        }).finally(() => {
+            this.convertingXsl.set(false);
         });
     }
 
