@@ -46,7 +46,10 @@ namespace EJ2APIServices.Controllers
         public IActionResult List()
         {
             var folder = GetFolder();
-            var items = SupportingDocumentRepository.ListSupporting(folder);
+            var items = SupportingDocumentRepository.ListSupporting(
+                folder,
+                _config["MainTemplateFileName"],
+                includeMissingMainTemplate: true);
             return Ok(items);
         }
 
@@ -116,11 +119,13 @@ namespace EJ2APIServices.Controllers
         /// Saves the template currently open in the editor back to the templates folder.
         ///
         /// The client sends the editor document serialized as SFDT. The server converts
-        /// it back to DOCX and overwrites the file it came from, so the template pack
+        /// it back to DOCX and writes it over the file it came from, so the template pack
         /// in wwwroot/Templates always reflects the latest edits.
         ///
-        /// Only files that already exist in the templates folder can be overwritten -
-        /// this endpoint does not create new templates.
+        /// When the target file does not exist yet - for example the editor is showing
+        /// the built-in sample because the main template has never been saved - the
+        /// file is CREATED. That keeps the Save action usable from the first edit
+        /// onwards instead of staying permanently disabled.
         /// </summary>
         [HttpPost("{id}/save")]
         public IActionResult Save(string id, [FromBody] SaveTemplateRequest request)
@@ -132,9 +137,19 @@ namespace EJ2APIServices.Controllers
 
             var folder = GetFolder();
             var path = SupportingDocumentRepository.ResolveTemplatePath(folder, id);
+
+            // The file may not exist yet (the main template has never been saved).
+            // Resolve the target path WITHOUT requiring the file to be present, but
+            // still apply the same path-traversal and extension checks.
+            bool creating = false;
             if (path == null)
             {
-                return NotFound(new { message = $"Template '{id}' was not found." });
+                path = SupportingDocumentRepository.ResolveTemplateTargetPath(folder, id);
+                if (path == null)
+                {
+                    return NotFound(new { message = $"Template '{id}' could not be saved." });
+                }
+                creating = true;
             }
 
             try

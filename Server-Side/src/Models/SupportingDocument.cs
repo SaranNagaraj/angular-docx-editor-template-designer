@@ -25,6 +25,15 @@ namespace EJ2APIServices.Models
         /// </summary>
         [JsonPropertyName("isMainTemplate")]
         public bool IsMainTemplate { get; set; }
+
+        /// <summary>
+        /// False for a main-template entry that is reported even though the file does
+        /// not exist on disk yet (the editor shows the built-in sample in that case).
+        /// The UI uses this to know that Save will CREATE the file rather than
+        /// overwrite it.
+        /// </summary>
+        [JsonPropertyName("exists")]
+        public bool Exists { get; set; } = true;
     }
 
     /// <summary>
