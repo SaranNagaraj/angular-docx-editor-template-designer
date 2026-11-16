@@ -75,7 +75,9 @@ namespace EJ2APIServices.Controllers
             var folder = SupportingDocumentRepository.GetFolder(
                 _env.ContentRootPath,
                 _config["TemplatesFolder"]);
-            var mainPath = SupportingDocumentRepository.GetMainTemplatePath(folder);
+            var mainPath = SupportingDocumentRepository.GetMainTemplatePath(
+                folder,
+                _config["MainTemplateFileName"]);
 
             string sfdt;
             if (mainPath != null)
@@ -93,7 +95,19 @@ namespace EJ2APIServices.Controllers
             {
                 sfdt = DocumentMergeService.BuildSampleTemplateSfdt();
             }
-            return Ok(new { sfdt });
+
+            // The id tells the client which file "Save Document" writes to. When the
+            // file does not exist yet the server still reports its name, so the user
+            // can save the built-in sample to disk and keep editing from there.
+            var fileName = SupportingDocumentRepository.GetMainTemplateFileName(
+                _config["MainTemplateFileName"]);
+
+            return Ok(new
+            {
+                sfdt,
+                fileName,
+                exists = mainPath != null
+            });
         }
 
         /// <summary>

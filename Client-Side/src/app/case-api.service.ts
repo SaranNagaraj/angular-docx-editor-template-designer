@@ -84,6 +84,16 @@ export interface GenerateRequest {
     appendedDocumentIds?: string[];
 }
 
+/** Response of GET /api/template - the default main template. */
+export interface DefaultTemplate {
+    /** The document serialized as SFDT, ready for the editor. */
+    sfdt: string;
+    /** File name inside the templates folder that Save Document writes to. */
+    fileName: string;
+    /** False when the file does not exist on disk yet (the built-in sample is shown). */
+    exists: boolean;
+}
+
 export type GenerateResult =
     | { kind: 'requires-input'; missingFields: MissingField[] }
     | { kind: 'merged'; mergedSfdt: string; documentName: string };
@@ -107,9 +117,8 @@ export class CaseApiService {
     /** Default main template as SFDT (the Notice of Hearing from the templates folder),
      * opened in the editor on application start. Falls back to the bundled sample
      * template server-side if the configured file is not present. */
-    getDefaultTemplate(): Promise<string> {
-        return firstValueFrom(this.http.get<{ sfdt: string }>('/api/template'))
-            .then(r => r.sfdt);
+    getDefaultTemplate(): Promise<DefaultTemplate> {
+        return firstValueFrom(this.http.get<DefaultTemplate>('/api/template'));
     }
 
     searchCases(keyword: string): Promise<CaseInfo[]> {
