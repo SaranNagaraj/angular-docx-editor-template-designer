@@ -6,9 +6,14 @@ using EJ2APIServices.Data;
 using EJ2APIServices.Models;
 using EJ2APIServices.Services;
 using Microsoft.AspNetCore.Cors;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
+using Syncfusion.DocIO;
 using Syncfusion.DocIO.DLS;
+using Syncfusion.DocIORenderer;
+using Syncfusion.Pdf;
 
 namespace EJ2APIServices.Controllers
 {
@@ -25,8 +30,21 @@ namespace EJ2APIServices.Controllers
     [Route("api/[controller]")]
     public class CasesController : Controller
     {
+        private readonly IWebHostEnvironment _env;
+        private readonly IConfiguration _config;
+
+        public CasesController(IWebHostEnvironment env, IConfiguration config)
+        {
+            _env = env;
+            _config = config;
+        }
+
         /// <summary>
-        /// Merge field schema for the explorer and the Insert Merge Field dialog.
+        /// Merge field schema for the explorer, the Insert Merge Field dialog, and the
+        /// missing-field prompt. Each entry carries a type tag that drives the UI input
+        /// control: "string" (default text box), "date" (date picker), "number" (numeric
+        /// text box), or "boolean" (checkbox). All values are submitted back to the
+        /// server as strings regardless of type.
         ///
         /// Field names are source-aware: fields reachable inside the Parties region
         /// carry the case source with a "Case:" prefix («Case:CaseNumber»), party
@@ -36,33 +54,45 @@ namespace EJ2APIServices.Controllers
         [Route("/api/schema")]
         public IActionResult Schema()
         {
-            return Ok(new Dictionary<string, object>
-            {
-                ["Case"] = new Dictionary<string, string>
-                {
-                    ["Case:CaseNumber"] = "string",
-                    ["Case:CaseCaption"] = "string"
-                },
-                ["Parties"] = new Dictionary<string, string>
-                {
-                    ["FirstName"] = "string",
-                    ["LastName"] = "string",
-                    ["Address"] = "string"
-                }
-            });
+            // All merge field definitions live in MergeFieldConfig (Models/FieldSchema.cs).
+            return Ok(MergeFieldConfig.Schema);
         }
 
         /// <summary>
-        /// The bundled sample Notice of Hearing template serialized as SFDT.
-        /// The Angular editor opens this on application start so the app never starts
-        /// blank and the sample already demonstrates case fields, the repeating party
-        /// region and parent fields inside the region.
+        /// The default main template ("Notice of Hearing") loaded from the configured
+        /// templates folder, serialized as SFDT. The Angular editor opens this on
+        /// application start so the app never starts blank.
+        ///
+        /// If the configured templates folder does not contain a "Notice of Hearing.docx"
+        /// (e.g. before the user has dropped the template pack into wwwroot/Templates),
+        /// this endpoint falls back to the bundled DocIO-generated sample template so the
+        /// app still works for a developer who has not yet added the customer-supplied files.
         /// </summary>
         [HttpGet]
         [Route("/api/template")]
         public IActionResult Template()
         {
-            string sfdt = DocumentMergeService.BuildSampleTemplateSfdt();
+            var folder = SupportingDocumentRepository.GetFolder(
+                _env.ContentRootPath,
+                _config["TemplatesFolder"]);
+            var mainPath = SupportingDocumentRepository.GetMainTemplatePath(folder);
+
+            string sfdt;
+            if (mainPath != null)
+            {
+                try
+                {
+                    sfdt = DocumentMergeService.LoadDocxAsSfdt(mainPath);
+                }
+                catch (Exception)
+                {
+                    sfdt = DocumentMergeService.BuildSampleTemplateSfdt();
+                }
+            }
+            else
+            {
+                sfdt = DocumentMergeService.BuildSampleTemplateSfdt();
+            }
             return Ok(new { sfdt });
         }
 
@@ -105,6 +135,9 @@ namespace EJ2APIServices.Controllers
         ///
         /// All selected cases are merged into one document: one notice block per case,
         /// one party block per party (ExecuteNestedGroup).
+        ///
+        /// If appendedDocumentIds are supplied, each is loaded from the configured
+        /// templates folder and appended to the merged document in the order received.
         /// </summary>
         [HttpPost]
         [Route("/api/generate")]
@@ -140,10 +173,36 @@ namespace EJ2APIServices.Controllers
                 template = DocumentMergeService.BuildSampleTemplate();
             }
 
+            // Resolve supporting document ids -> file paths. Skip unknown ids so a stale
+            // selection from a previous session does not break the request.
+            var supportingPaths = new List<string>();
+            if (request.AppendedDocumentIds != null && request.AppendedDocumentIds.Count > 0)
+            {
+                var folder = SupportingDocumentRepository.GetFolder(
+                    _env.ContentRootPath,
+                    _config["TemplatesFolder"]);
+
+                foreach (var id in request.AppendedDocumentIds)
+                {
+                    // The main template is the document being merged - appending it to
+                    // itself makes no sense, so it is never accepted as a supporting doc.
+                    if (string.Equals(id, SupportingDocumentRepository.DefaultMainTemplateFileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var path = SupportingDocumentRepository.GetSupportingFilePath(folder, id);
+                    if (path != null)
+                    {
+                        supportingPaths.Add(path);
+                    }
+                }
+            }
+
             try
             {
                 var additional = request.AdditionalMergeData ?? new List<AdditionalMergeValue>();
-                var outcome = DocumentMergeService.Merge(template, cases, additional);
+                var outcome = DocumentMergeService.Merge(template, cases, additional, supportingPaths);
 
                 if (outcome.MissingFields.Count > 0)
                 {
@@ -155,12 +214,122 @@ namespace EJ2APIServices.Controllers
                     });
                 }
 
-                // One merged document for every selected case, opened in the editor.
+                // One merged document for every selected case + appended supporting documents,
+                // opened in the editor.
                 return Ok(new GenerateMergedResponse
                 {
                     MergedSfdt = outcome.MergedSfdt,
                     DocumentName = outcome.DocumentName
                 });
+            }
+            finally
+            {
+                template.Close();
+            }
+        }
+
+        /// <summary>
+        /// Mail merge + Word -> PDF in one round trip. Runs the same merge pipeline as
+        /// /api/generate (same templateSfdt, caseIds, supporting docs, missing-field
+        /// handling) and converts the merged WordDocument to PDF using the canonical
+        /// DocIORenderer pattern from
+        /// https://help.syncfusion.com/document-processing/word/conversions/word-to-pdf/net/word-to-pdf
+        /// so the user can download the finalised document as a PDF.
+        ///
+        /// Returns the PDF as application/pdf so the browser can save it directly.
+        /// If the merge produced missing fields, the response is the same JSON shape
+        /// as /api/generate (requiresInput + missingFields) with HTTP 200, so the
+        /// client can prompt the user and retry.
+        /// </summary>
+        [HttpPost]
+        [Route("/api/generate-pdf")]
+        public IActionResult GeneratePdf([FromBody] GenerateRequest request)
+        {
+            if (request?.CaseIds == null || request.CaseIds.Count == 0)
+            {
+                return BadRequest(new { message = "Select at least one case." });
+            }
+
+            var cases = new List<CaseData>();
+            foreach (var id in request.CaseIds)
+            {
+                var caseData = CaseRepository.GetCase(id);
+                if (caseData == null)
+                {
+                    return NotFound(new { message = $"Case {id} was not found." });
+                }
+                cases.Add(caseData);
+            }
+
+            WordDocument template;
+            try
+            {
+                template = string.IsNullOrEmpty(request.TemplateSfdt)
+                    ? DocumentMergeService.BuildSampleTemplate()
+                    : DocumentMergeService.LoadTemplateFromSfdt(request.TemplateSfdt);
+            }
+            catch (Exception)
+            {
+                template = DocumentMergeService.BuildSampleTemplate();
+            }
+
+            var supportingPaths = new List<string>();
+            if (request.AppendedDocumentIds != null && request.AppendedDocumentIds.Count > 0)
+            {
+                var folder = SupportingDocumentRepository.GetFolder(
+                    _env.ContentRootPath,
+                    _config["TemplatesFolder"]);
+
+                foreach (var id in request.AppendedDocumentIds)
+                {
+                    if (string.Equals(id, SupportingDocumentRepository.DefaultMainTemplateFileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    var path = SupportingDocumentRepository.GetSupportingFilePath(folder, id);
+                    if (path != null)
+                    {
+                        supportingPaths.Add(path);
+                    }
+                }
+            }
+
+            try
+            {
+                var additional = request.AdditionalMergeData ?? new List<AdditionalMergeValue>();
+                var outcome = new MergeOutcome();
+                var merged = DocumentMergeService.MergeAsDocument(template, cases, additional, supportingPaths, outcome);
+
+                if (merged == null)
+                {
+                    // Missing fields - return the same JSON shape as /api/generate so the
+                    // client can reuse its missing-field dialog flow.
+                    return Ok(new GenerateRequiresInputResponse
+                    {
+                        RequiresInput = true,
+                        MissingFields = outcome.MissingFields
+                    });
+                }
+
+                try
+                {
+                    // Canonical Word -> PDF pattern from the Syncfusion docs:
+                    //   using (DocIORenderer renderer = new DocIORenderer())
+                    //   using (PdfDocument pdfDocument = renderer.ConvertToPDF(wordDocument))
+                    using (var renderer = new DocIORenderer())
+                    using (var pdfDocument = renderer.ConvertToPDF(merged))
+                    {
+                        using (var outputStream = new MemoryStream())
+                        {
+                            pdfDocument.Save(outputStream);
+                            return File(outputStream.ToArray(), "application/pdf", "Merged-Notice-of-Hearing.pdf");
+                        }
+                    }
+                }
+                finally
+                {
+                    merged.Close();
+                }
             }
             finally
             {

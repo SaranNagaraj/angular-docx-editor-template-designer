@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<xsl:stylesheet version="1.0"
+    xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+
+    <xsl:template match="/">
+        <html>
+        <body>
+            <h2 style="text-align:center;">
+                NOTICE OF HEARING
+            </h2>
+            <p>TO ALL PARTIES OF RECORD:</p>
+            <p>
+                PLEASE TAKE NOTICE that a hearing has been scheduled in the above-captioned matter.
+            </p>
+            <xsl:for-each select="Case">
+            <p>
+                Case Number:
+                <xsl:value-of select="CaseNumber"/>
+            </p>
+            <p>
+                Case Caption:
+                <xsl:value-of select="CaseCaption"/>
+            </p>
+            <p>
+                Notice Date:
+                <xsl:value-of select="NoticeDate"/>
+            </p>
+            <p>
+        ---------------------------------------------------------------------
+            </p>
+            <hr/>
+            <xsl:for-each select="Parties">
+                <p>
+                    Dear
+                    <xsl:value-of select="FirstName"/>
+                    <xsl:text> </xsl:text>
+                    <xsl:value-of select="LastName"/>:
+                </p>
+                <p>
+                    You are hereby notified that a hearing has been scheduled in the following case:
+                </p>
+                <p>
+                    Case Number:
+                    <xsl:value-of select="Case:CaseNumber"/>
+                </p>
+                <p>
+                    Case Caption:
+                    <xsl:value-of select="Case:CaseCaption"/>
+                </p>
+                <p>
+                    Mailing Address:
+                    <xsl:value-of select="Address"/>
+                </p>
+                <p>
+                    Presiding Judge:
+                    <xsl:value-of select="JudgeName"/>
+                </p>
+                <p>
+                    Please appear before the Court at the designated hearing date and time.
+                </p>
+                <p>
+                    ---------------------------------------------------------------------
+                </p>
+                <hr/>
+            </xsl:for-each>
+            </xsl:for-each>
+            <p>Respectfully Submitted,</p>
+            <p>Court Administration</p>
+        </body>
+        </html>
+    </xsl:template>
+</xsl:stylesheet>
