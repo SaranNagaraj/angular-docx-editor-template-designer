@@ -391,26 +391,26 @@ namespace EJ2APIServices.Services
         ///      supplied them, with SectionBreakCode.NewPage between each, producing ONE
         ///      consolidated document.
         /// </summary>
-        public static MergeOutcome Merge(
+        /// <summary>
+        /// Runs the mail merge over the selected cases and supporting documents and
+        /// returns the merged WordDocument ready for further processing (e.g. conversion
+        /// to PDF via DocIORenderer). The CALLER owns the returned document and must
+        /// Close() it.
+        ///
+        /// Returns null when the merge produced missing fields. The shared outcome is
+        /// populated in that case so the caller can prompt the user.
+        /// </summary>
+        public static WordDocument MergeAsDocument(
             WordDocument mainTemplate,
             List<CaseData> cases,
             List<AdditionalMergeValue> additionalData,
-            List<string> supportingDocumentPaths = null)
+            List<string> supportingDocumentPaths,
+            MergeOutcome outcome)
         {
-            // Phase 1: merge the main template (cloned, so the caller's WordDocument is not mutated).
             var main = mainTemplate.Clone();
-            var outcome = new MergeOutcome();
 
             var mainResult = RunMergeOnDocument(main, cases, additionalData, outcome, "main");
 
-            // Phase 2: merge every selected supporting document. Run this even when the main
-            // template produced missing fields, so the user gets a SINGLE prompt covering the
-            // main template AND every supporting document in one go.
-            //
-            // We do NOT append yet: if either phase has missing fields, the caller will
-            // prompt the user and re-call Merge(...) with additionalData populated. The
-            // current run only collects missing fields; the production run (after the
-            // prompt) does the actual appending.
             var supportingClones = new List<(string Label, WordDocument Doc)>();
             if (supportingDocumentPaths != null && supportingDocumentPaths.Count > 0)
             {
@@ -431,15 +431,11 @@ namespace EJ2APIServices.Services
 
                     if (!ok && !mainResult)
                     {
-                        // Both phases have produced missing fields - no point looking further,
-                        // the prompt will cover everything we've found so far.
                         break;
                     }
                 }
             }
 
-            // If either phase still has missing fields, return the prompt response WITHOUT
-            // appending anything. The user's answers will be supplied on the next call.
             if (!mainResult || outcome.MissingFields.Count > 0)
             {
                 foreach (var (_, supporting) in supportingClones)
@@ -447,14 +443,29 @@ namespace EJ2APIServices.Services
                     supporting.Close();
                 }
                 main.Close();
-                return outcome;
+                return null;
             }
 
-            // Production: append every merged supporting document to the main merged doc.
             foreach (var (_, supporting) in supportingClones)
             {
                 AppendSupportingDocument(main, supporting);
                 supporting.Close();
+            }
+
+            return main;
+        }
+
+        public static MergeOutcome Merge(
+            WordDocument mainTemplate,
+            List<CaseData> cases,
+            List<AdditionalMergeValue> additionalData,
+            List<string> supportingDocumentPaths = null)
+        {
+            var outcome = new MergeOutcome();
+            var main = MergeAsDocument(mainTemplate, cases, additionalData, supportingDocumentPaths, outcome);
+            if (main == null)
+            {
+                return outcome; // missing fields; nothing to append or serialise
             }
 
             outcome.MergedSfdt = ToSfdt(main);

@@ -5,8 +5,9 @@ using EJ2APIServices.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Syncfusion.DocIO;
 using Syncfusion.DocIO.DLS;
-using Syncfusion.PdfToDocConverter;
+using Syncfusion.SmartDataExtractor;
 
 namespace EJ2APIServices.Controllers
 {
@@ -16,9 +17,11 @@ namespace EJ2APIServices.Controllers
     /// POST /api/pdf/convert-and-save   (multipart upload; saves to templates folder and
     ///                                  returns the resulting template id + SFDT)
     ///
-    /// The conversion uses Syncfusion's PdfToDocConverter. The output WordDocument is
-    /// re-serialised as SFDT so the Angular editor can open it directly without ever
-    /// dealing with a DOCX file on disk.
+    /// The conversion uses Syncfusion's SmartDataExtractor (DataExtractor) per the
+    /// canonical pattern at
+    /// https://help.syncfusion.com/document-processing/data-extraction/net/conversions/pdf-to-word
+    /// The output WordDocument is re-serialised as SFDT so the Angular editor can
+    /// open it directly without ever dealing with a DOCX file on disk.
     /// </summary>
     [Route("api/[controller]")]
     public class PdfController : Controller
@@ -40,9 +43,6 @@ namespace EJ2APIServices.Controllers
             {
                 return BadRequest(new { message = "No PDF file was uploaded." });
             }
-
-            // Make sure the uploaded file is a PDF (defence in depth on top of the
-            // accept="application/pdf" attribute on the file input).
             if (!LooksLikePdf(file))
             {
                 return BadRequest(new { message = "Only PDF files are accepted." });
@@ -50,10 +50,14 @@ namespace EJ2APIServices.Controllers
 
             try
             {
+                // Canonical pattern from the Syncfusion docs (PDF -> Word):
+                //   DataExtractor extractor = new DataExtractor();
+                //   WordDocument document = extractor.ExtractDataAsWordDocument(stream);
+                //   document.Save(saveStream, FormatType.Docx);
                 using (var pdfStream = file.OpenReadStream())
                 {
-                    var converter = new PdfToDocConverter();
-                    using (var wordDoc = converter.Convert(pdfStream))
+                    var extractor = new DataExtractor();
+                    using (var wordDoc = extractor.ExtractDataAsWordDocument(pdfStream))
                     {
                         var sfdt = DocumentMergeService.ToSfdt(wordDoc);
                         return Ok(new SupportingDocumentSfdtResponse { Sfdt = sfdt });
@@ -100,7 +104,7 @@ namespace EJ2APIServices.Controllers
                 _env.ContentRootPath,
                 _config["TemplatesFolder"]);
 
-            // Ensure the templates folder exists; PdfToDocConverter does not need it,
+            // Ensure the templates folder exists; DataExtractor does not need it,
             // but the save target must be writable.
             if (!Directory.Exists(folder))
             {
@@ -112,10 +116,14 @@ namespace EJ2APIServices.Controllers
 
             try
             {
+                // Canonical pattern from the Syncfusion docs (PDF -> Word):
+                //   DataExtractor extractor = new DataExtractor();
+                //   WordDocument document = extractor.ExtractDataAsWordDocument(stream);
+                //   document.Save(saveStream, FormatType.Docx);
                 using (var pdfStream = file.OpenReadStream())
                 {
-                    var converter = new PdfToDocConverter();
-                    using (var wordDoc = converter.Convert(pdfStream))
+                    var extractor = new DataExtractor();
+                    using (var wordDoc = extractor.ExtractDataAsWordDocument(pdfStream))
                     {
                         // Persist the DOCX so the user can re-load it later and so the
                         // Save Document action (which writes back as DOCX) keeps working.

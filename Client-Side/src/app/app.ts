@@ -211,6 +211,10 @@ function coerceTypedValue(type: FieldType, value: string): string {
                         [disabled]="selectedIds().size === 0 || previewing() || generating()">
                         {{ previewing() ? 'Building Preview...' : 'Preview Document' }}
                     </button>
+                    <button type="button" class="poc-btn poc-btn-block" (click)="exportPdf()"
+                        [disabled]="selectedIds().size === 0 || exportingPdf() || generating()">
+                        {{ exportingPdf() ? 'Exporting...' : 'Export as PDF' }}
+                    </button>
                     <!-- Hidden file input wired to triggerPdfPicker(). Accepts PDF only. -->
                     <input #pdfFileInput type="file" accept="application/pdf,.pdf"
                         style="display:none"
@@ -384,8 +388,8 @@ export class App implements AfterViewInit, OnDestroy {
     public previewMode = signal(false);
     /** Cached SFDT of the last successful preview so Generate can reuse it without re-merging. */
     private previewedSfdt: string | null = null;
-    /** Mode to resume after the missing-field dialog is submitted (preview or generate). */
-    private pendingMode: 'preview' | 'generate' | null = null;
+    /** Mode to resume after the missing-field dialog is submitted. */
+    private pendingMode: 'preview' | 'generate' | 'export-pdf' | null = null;
     /** File id of the default main template, resolved from the template list. */
     private mainTemplateId = '';
     /** True when the editor currently holds the default main template. */
@@ -415,6 +419,7 @@ export class App implements AfterViewInit, OnDestroy {
     public editorHoldsTemplate = signal(false);
     public saving = signal(false);
     public convertingPdf = signal(false);
+    public exportingPdf = signal(false);
 
     /** Reference to the hidden <input type="file"> used by the Open PDF Document button. */
     @ViewChild('pdfFileInput', { static: false })
@@ -811,6 +816,65 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     /**
+     * Mail-merge the selected cases + supporting documents and download the result
+     * as a PDF. Runs the same merge pipeline as Preview / Generate; the server
+     * converts the merged Word document to PDF using Syncfusion DocIORenderer.
+     */
+    public exportPdf(): void {
+        if (this.selectedIds().size === 0) { return; }
+        this.exportingPdf.set(true);
+        this.generating.set(true);
+        this.statusMessage.set('');
+        this.runExportPdf([]);
+    }
+
+    /**
+     * Re-runs the PDF export after the user supplied missing-field values.
+     * Stays in export mode across the prompt so the second pass actually delivers
+     * a PDF download.
+     */
+    private runExportPdf(additionalMergeData: AdditionalMergeValue[]): void {
+        const templateSfdt = this.editor?.serialize();
+        const request = {
+            caseIds: Array.from(this.selectedIds()),
+            additionalMergeData,
+            templateSfdt,
+            appendedDocumentIds: Array.from(this.selectedAppendedIds())
+        };
+
+        this.api.generatePdf(request).then(result => {
+            this.exportingPdf.set(false);
+            this.generating.set(false);
+
+            if (result.kind === 'requires-input') {
+                this.openMissingDialog(result.missingFields, 'export-pdf');
+                return;
+            }
+
+            // Trigger the browser download.
+            const url = URL.createObjectURL(result.blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = result.fileName;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+
+            const appendedCount = this.selectedAppendedIds().size;
+            const caseCount = this.selectedIds().size;
+            const suffix = appendedCount > 0
+                ? ` and ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
+                : '';
+            this.statusMessage.set(`Downloaded ${result.fileName} (${caseCount} case(s)${suffix}).`);
+        }).catch(() => {
+            this.exportingPdf.set(false);
+            this.generating.set(false);
+            this.statusMessage.set('PDF export failed. Check the service log.');
+        });
+    }
+
+    /**
      * Drops preview mode and reloads the template that was open before the preview
      * so the user can continue editing it.
      */
@@ -889,7 +953,7 @@ export class App implements AfterViewInit, OnDestroy {
         });
     }
 
-    private openMissingDialog(missing: MissingField[], mode: 'preview' | 'generate'): void {
+    private openMissingDialog(missing: MissingField[], mode: 'preview' | 'generate' | 'export-pdf'): void {
         this.pendingMode = mode;
         this.missingInputs.set(missing.map(m => {
             // Resolve the type from the static field-metadata map; unknown fields
@@ -961,13 +1025,20 @@ export class App implements AfterViewInit, OnDestroy {
                 value: coerceTypedValue(item.type, item.value)
             }));
 
-        // Preserve the originating action: if the user opened the dialog from a
-        // Preview click, stay in preview mode after the second pass resolves the
-        // missing fields; if from Generate, finalize the document.
-        const mode: 'preview' | 'generate' = this.pendingMode ?? (this.previewing() ? 'preview' : 'generate');
+        // Preserve the originating action: Preview -> back to preview, Generate ->
+        // finalize, Export as PDF -> trigger the PDF download on the second pass.
+        const mode: 'preview' | 'generate' | 'export-pdf' = this.pendingMode
+            ?? (this.exportingPdf() ? 'export-pdf'
+                : this.previewing() ? 'preview' : 'generate');
         this.pendingMode = null;
 
         this.showMissingDialog.set(false);
+
+        if (mode === 'export-pdf') {
+            this.runExportPdf(additionalMergeData);
+            return;
+        }
+
         this.generating.set(true);
         this.runMerge(mode, additionalMergeData);
     }

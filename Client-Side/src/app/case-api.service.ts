@@ -138,6 +138,36 @@ export class CaseApiService {
     }
 
     /**
+     * Runs the same mail merge as /api/generate and returns the result as a PDF
+     * (server uses Syncfusion DocIORenderer for the Word -> PDF step). The browser
+     * triggers a download via the returned Blob URL.
+     *
+     * Returns null when the server reports missing fields, in which case `missingFields`
+     * is populated so the client can prompt and re-call /api/generate as usual.
+     */
+    async generatePdf(request: GenerateRequest): Promise<{ kind: 'pdf'; blob: Blob; fileName: string } | { kind: 'requires-input'; missingFields: MissingField[] }> {
+        const response = await firstValueFrom(this.http.post(
+            '/api/generate-pdf',
+            request,
+            { observe: 'response', responseType: 'blob' }));
+        const contentType = response.headers.get('content-type') ?? '';
+
+        if (contentType.includes('application/json')) {
+            const text = await response.body!.text();
+            const parsed = JSON.parse(text) as Partial<{ requiresInput: boolean; missingFields: MissingField[] }>;
+            if (parsed.requiresInput) {
+                return { kind: 'requires-input', missingFields: parsed.missingFields ?? [] };
+            }
+            throw new Error('Unexpected generate-pdf response.');
+        }
+
+        const disposition = response.headers.get('content-disposition') ?? '';
+        const match = /filename="?([^";]+)"?/i.exec(disposition);
+        const fileName = match ? match[1] : 'Merged-Notice-of-Hearing.pdf';
+        return { kind: 'pdf', blob: response.body!, fileName };
+    }
+
+    /**
      * Converts an uploaded PDF to a DOCX and returns the resulting SFDT for the
      * editor. The converted document is NOT saved to the templates folder; if the
      * user wants to keep it, they must use Save Document afterwards.

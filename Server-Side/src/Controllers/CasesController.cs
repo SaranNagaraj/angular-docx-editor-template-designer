@@ -10,7 +10,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Syncfusion.DocIO;
 using Syncfusion.DocIO.DLS;
+using Syncfusion.DocIORenderer;
+using Syncfusion.Pdf;
 
 namespace EJ2APIServices.Controllers
 {
@@ -232,6 +235,108 @@ namespace EJ2APIServices.Controllers
                     MergedSfdt = outcome.MergedSfdt,
                     DocumentName = outcome.DocumentName
                 });
+            }
+            finally
+            {
+                template.Close();
+            }
+        }
+
+        /// <summary>
+        /// Mail merge + Word -> PDF in one round trip. Runs the same merge pipeline as
+        /// /api/generate (same templateSfdt, caseIds, supporting docs, missing-field
+        /// handling) and converts the merged WordDocument to PDF using the canonical
+        /// DocIORenderer pattern from
+        /// https://help.syncfusion.com/document-processing/word/conversions/word-to-pdf/net/word-to-pdf
+        /// so the user can download the finalised document as a PDF.
+        ///
+        /// Returns the PDF as application/pdf so the browser can save it directly.
+        /// If the merge produced missing fields, the response is the same JSON shape
+        /// as /api/generate (requiresInput + missingFields) with HTTP 200, so the
+        /// client can prompt the user and retry.
+        /// </summary>
+        [HttpPost]
+        [Route("/api/generate-pdf")]
+        public IActionResult GeneratePdf([FromBody] GenerateRequest request)
+        {
+            if (request?.CaseIds == null || request.CaseIds.Count == 0)
+            {
+                return BadRequest(new { message = "Select at least one case." });
+            }
+
+            var cases = new List<CaseData>();
+            foreach (var id in request.CaseIds)
+            {
+                var caseData = CaseRepository.GetCase(id);
+                if (caseData == null)
+                {
+                    return NotFound(new { message = $"Case {id} was not found." });
+                }
+                cases.Add(caseData);
+            }
+
+            WordDocument template;
+            try
+            {
+                template = string.IsNullOrEmpty(request.TemplateSfdt)
+                    ? DocumentMergeService.BuildSampleTemplate()
+                    : DocumentMergeService.LoadTemplateFromSfdt(request.TemplateSfdt);
+            }
+            catch (Exception)
+            {
+                template = DocumentMergeService.BuildSampleTemplate();
+            }
+
+            var supportingPaths = new List<string>();
+            if (request.AppendedDocumentIds != null && request.AppendedDocumentIds.Count > 0)
+            {
+                var folder = SupportingDocumentRepository.GetFolder(
+                    _env.ContentRootPath,
+                    _config["TemplatesFolder"]);
+
+                foreach (var id in request.AppendedDocumentIds)
+                {
+                    if (string.Equals(id, SupportingDocumentRepository.DefaultMainTemplateFileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    var path = SupportingDocumentRepository.GetSupportingFilePath(folder, id);
+                    if (path != null)
+                    {
+                        supportingPaths.Add(path);
+                    }
+                }
+            }
+
+            try
+            {
+                var additional = request.AdditionalMergeData ?? new List<AdditionalMergeValue>();
+                var outcome = new MergeOutcome();
+                var merged = DocumentMergeService.MergeAsDocument(template, cases, additional, supportingPaths, outcome);
+
+                if (merged == null)
+                {
+                    // Missing fields - return the same JSON shape as /api/generate so the
+                    // client can reuse its missing-field dialog flow.
+                    return Ok(new GenerateRequiresInputResponse
+                    {
+                        RequiresInput = true,
+                        MissingFields = outcome.MissingFields
+                    });
+                }
+
+                // Canonical Word -> PDF pattern from the Syncfusion docs:
+                //   using (DocIORenderer renderer = new DocIORenderer())
+                //   using (PdfDocument pdfDocument = renderer.ConvertToPDF(wordDocument))
+                using (var renderer = new DocIORenderer())
+                using (var pdfDocument = renderer.ConvertToPDF(merged))
+                {
+                    using (var outputStream = new MemoryStream())
+                    {
+                        pdfDocument.Save(outputStream);
+                        return File(outputStream.ToArray(), "application/pdf", "Merged-Notice-of-Hearing.pdf");
+                    }
+                }
             }
             finally
             {
