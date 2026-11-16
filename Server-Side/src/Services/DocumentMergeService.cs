@@ -540,13 +540,16 @@ namespace EJ2APIServices.Services
         /// </summary>
         private static void AppendSupportingDocument(WordDocument main, WordDocument supporting)
         {
-            var options = new ImportOptions
-            {
-                KeepStyles = true,
-                MergeStyles = false,
-                CopyStyles = false
-            };
-            main.AppendDocument(supporting, options, SectionBreakCode.NewPage);
+            if (main.LastSection != null)
+    {
+        main.LastSection.AddParagraph()
+            .AppendBreak(BreakType.PageBreak);
+    }
+
+    foreach (WSection section in supporting.Sections)
+    {
+        main.Sections.Add((WSection)section.Clone());
+    }
         }
 
         /// <summary>
