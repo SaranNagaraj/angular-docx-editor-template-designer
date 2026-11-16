@@ -27,6 +27,9 @@ namespace EJ2APIServices.Data
         /// <summary>Default main template file name (must live in the templates folder).</summary>
         public const string DefaultMainTemplateFileName = "Notice of Hearing.docx";
 
+        /// <summary>Default XSL/XSLT stylesheet converted by POST /api/templates/xsl-to-word.</summary>
+        public const string DefaultXslTemplateFileName = "InputXSL.txt";
+
         /// <summary>Absolute path to the configured folder.</summary>
         public static string GetFolder(string contentRootPath, string configuredFolder)
         {
@@ -88,8 +91,12 @@ namespace EJ2APIServices.Data
         /// Resolves a template id (plain .docx file name) to its path inside the folder.
         /// Path-traversal protection: no directory separators, no "..", and the resolved
         /// path must stay inside the folder. Returns null if invalid or missing.
+        ///
+        /// When no extension is supplied only ".docx" is accepted, which keeps the DOCX
+        /// endpoints locked down to Word documents. Callers can widen this explicitly
+        /// (e.g. the XSL endpoint passes ".txt").
         /// </summary>
-        public static string ResolveTemplatePath(string folder, string id)
+        public static string ResolveTemplatePath(string folder, string id, params string[] allowedExtensions)
         {
             if (string.IsNullOrWhiteSpace(id))
             {
@@ -97,8 +104,18 @@ namespace EJ2APIServices.Data
             }
 
             if (id.IndexOfAny(new[] { '/', '\\' }) >= 0
-                || id.Contains("..", StringComparison.Ordinal)
-                || !id.EndsWith(".docx", StringComparison.OrdinalIgnoreCase))
+                || id.Contains("..", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var extensions = (allowedExtensions == null || allowedExtensions.Length == 0)
+                ? new[] { ".docx" }
+                : allowedExtensions;
+
+            bool extensionAllowed = extensions.Any(ext =>
+                id.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+            if (!extensionAllowed)
             {
                 return null;
             }

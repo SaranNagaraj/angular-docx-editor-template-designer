@@ -38,6 +38,17 @@ namespace EJ2APIServices.Models
     }
 
     /// <summary>
+    /// Body of POST /api/templates/xsl-to-word. FileName is the name of the XSL/XSLT
+    /// stylesheet inside the templates folder; it defaults to "InputXSL.txt" when
+    /// omitted.
+    /// </summary>
+    public class XslToWordRequest
+    {
+        [JsonPropertyName("fileName")]
+        public string FileName { get; set; }
+    }
+
+    /// <summary>
     /// Body of POST /api/templates/{id}/save: the editor's current document
     /// serialized as SFDT. The server converts it back to DOCX and writes it over
     /// the file in the templates folder.

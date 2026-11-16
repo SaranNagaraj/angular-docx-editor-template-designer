@@ -14,6 +14,9 @@ namespace EJ2APIServices.Controllers
     /// GET  /api/templates              - list available templates
     /// GET  /api/templates/{id}         - load a template as SFDT
     /// POST /api/templates/{id}/save    - save the edited template back to disk
+    /// POST /api/templates/xsl-to-word  - convert an XSL/XSLT stylesheet from the
+    ///                                     templates folder into a Word mail-merge
+    ///                                     template and return it as SFDT
     ///
     /// The templates live in a folder on disk configured by "TemplatesFolder" in
     /// appsettings.json (defaults to "wwwroot/Templates" under the content root).
@@ -45,6 +48,47 @@ namespace EJ2APIServices.Controllers
             var folder = GetFolder();
             var items = SupportingDocumentRepository.ListSupporting(folder);
             return Ok(items);
+        }
+
+        /// <summary>
+        /// Converts an XSL/XSLT stylesheet stored in the templates folder (as a .txt
+        /// file, e.g. InputXSL.txt) into a Word mail-merge template and returns it as
+        /// SFDT so the editor can open it directly.
+        ///
+        /// The stylesheet's xsl:for-each elements become «BeginGroup:X» /
+        /// «EndGroup:X» merge regions and xsl:value-of become MERGEFIELDs, so the
+        /// generated document works with the same mail-merge pipeline as the other
+        /// templates.
+        ///
+        /// The file name is optional; it defaults to "InputXSL.txt".
+        /// </summary>
+        [HttpPost("xsl-to-word")]
+        public IActionResult XslToWord([FromBody] XslToWordRequest request)
+        {
+            var fileName = string.IsNullOrWhiteSpace(request?.FileName)
+                ? SupportingDocumentRepository.DefaultXslTemplateFileName
+                : request.FileName;
+
+            var folder = GetFolder();
+            var path = SupportingDocumentRepository.ResolveTemplatePath(folder, fileName, ".txt");
+            if (path == null)
+            {
+                return NotFound(new { message = $"XSL template '{fileName}' was not found in the templates folder." });
+            }
+
+            try
+            {
+                var converter = new XslToWordTemplateConverter();
+                using (var wordDoc = converter.ConvertToWordDocument(path))
+                {
+                    var sfdt = DocumentMergeService.ToSfdt(wordDoc);
+                    return Ok(new SupportingDocumentSfdtResponse { Sfdt = sfdt });
+                }
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = $"Could not convert the XSL template '{fileName}': {ex.Message}" });
+            }
         }
 
         [HttpGet("{id}")]

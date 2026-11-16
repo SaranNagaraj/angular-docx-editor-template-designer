@@ -155,6 +155,20 @@ export class CaseApiService {
     }
 
     /**
+     * Converts the XSL/XSLT stylesheet from the templates folder (InputXSL.txt) into
+     * a Word mail-merge template and returns it as SFDT for the editor.
+     *
+     * Server side turns xsl:for-each into merge regions and xsl:value-of into
+     * merge fields, so the result works with the same mail-merge pipeline as the
+     * other templates.
+     */
+    convertXslToWord(fileName?: string): Promise<string> {
+        return firstValueFrom(this.http.post<{ sfdt: string }>(
+            '/api/templates/xsl-to-word', { fileName: fileName ?? 'InputXSL.txt' }))
+            .then(r => r.sfdt);
+    }
+
+    /**
      * Runs the same mail merge as /api/generate and returns the result as a PDF
      * (server uses Syncfusion DocIORenderer for the Word -> PDF step). The browser
      * triggers a download via the returned Blob URL.
