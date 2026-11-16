@@ -71,21 +71,24 @@ function buildMissingFieldLabel(
 /**
  * Validates one typed value. Returns null when valid, otherwise an error message.
  * - date:    non-empty + parseable by Date
- * - number:  non-empty + finite number
- * - boolean: always valid (a checkbox always has a value)
+ * - number:  non-empty + strict decimal form (optional sign, digits, optional
+ *            fractional digits). Rejects '1e5', 'Infinity', '0x11', blank input.
+ * - boolean: always valid (a toggle always has a value)
  * - string:  any value is valid
  */
+const NUMBER_PATTERN = /^-?\d+(\.\d+)?$/;
+
 function validateTypedValue(type: FieldType, value: string): string | null {
     if (type === 'boolean') {
         return null;
     }
     if (!value || !value.trim()) {
+        // String fields may be left empty; every other typed field is required.
         return type === 'string' ? null : 'Value is required.';
     }
     if (type === 'number') {
-        const n = Number(value);
-        if (!Number.isFinite(n)) {
-            return 'Enter a valid number.';
+        if (!NUMBER_PATTERN.test(value.trim())) {
+            return 'Enter a valid number (digits only, e.g. 250 or 19.99).';
         }
     } else if (type === 'date') {
         const d = new Date(value);
@@ -335,18 +338,23 @@ function coerceTypedValue(type: FieldType, value: string): string {
                                     [class.poc-input-invalid]="invalidFor(item)">
                             }
                             @case ('number') {
-                                <input type="number" class="poc-input" step="any"
+                                <!-- type=text + inputmode=decimal: the browser reports
+                                     '' for invalid native number input, which would
+                                     lose the raw text and show the wrong message. -->
+                                <input type="text" inputmode="decimal" class="poc-input"
                                     [(ngModel)]="item.value"
                                     name="missingValue{{ $index }}"
+                                    placeholder="e.g. 250 or 19.99"
                                     [class.poc-input-invalid]="invalidFor(item)">
                             }
                             @case ('boolean') {
-                                <label class="poc-checkbox-row">
-                                    <input type="checkbox"
+                                <label class="poc-toggle-row">
+                                    <input type="checkbox" role="switch"
                                         [checked]="item.value === 'true'"
                                         (change)="onBooleanChange(item, $event)"
                                         name="missingValue{{ $index }}">
-                                    <span>{{ item.value === 'true' ? 'Yes' : 'No' }}</span>
+                                    <span class="poc-toggle-track" aria-hidden="true"></span>
+                                    <span class="poc-toggle-label">{{ item.value === 'true' ? 'Yes' : 'No' }}</span>
                                 </label>
                             }
                             @default {

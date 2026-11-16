@@ -256,6 +256,69 @@
     height: 16px;
 }
 
+/* Boolean toggle switch (missing-field dialog) */
+.poc-toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+    font-size: 0.875rem;
+    color: #374151;
+    cursor: pointer;
+    user-select: none;
+}
+
+.poc-toggle-row input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.poc-toggle-track {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    background: #d1d5db;
+    border-radius: 999px;
+    transition: background 0.2s ease;
+    flex-shrink: 0;
+}
+
+.poc-toggle-track::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    background: #ffffff;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s ease;
+}
+
+/* Checked state: the sibling input drives the track colour and knob position. */
+.poc-toggle-row input:checked + .poc-toggle-track {
+    background: #2563eb;
+}
+
+.poc-toggle-row input:checked + .poc-toggle-track::after {
+    transform: translateX(18px);
+}
+
+/* Keyboard focus ring on the track when the hidden input is focused. */
+.poc-toggle-row input:focus-visible + .poc-toggle-track {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+.poc-toggle-label {
+    min-width: 24px;
+    font-weight: 500;
+}
+
 .poc-input-invalid {
     border-color: #dc2626;
     background: #fef2f2;
