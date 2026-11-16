@@ -54,22 +54,8 @@ namespace EJ2APIServices.Controllers
         [Route("/api/schema")]
         public IActionResult Schema()
         {
-            return Ok(new FieldSchema
-            {
-                Case = new Dictionary<string, FieldSchemaEntry>
-                {
-                    ["CaseNumber"]  = new FieldSchemaEntry { Type = FieldTypes.Number,  Label = "Case Number" },
-                    ["CaseCaption"] = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Case Caption" },
-                    ["NoticeDate"]  = new FieldSchemaEntry { Type = FieldTypes.Date,    Label = "Notice Date" },
-                    ["JudgeName"]   = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Presiding Judge" }
-                },
-                Parties = new Dictionary<string, FieldSchemaEntry>
-                {
-                    ["FirstName"] = new FieldSchemaEntry { Type = FieldTypes.String, Label = "First Name" },
-                    ["LastName"]  = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Last Name" },
-                    ["Address"]   = new FieldSchemaEntry { Type = FieldTypes.String, Label = "Mailing Address" }
-                }
-            });
+            // All merge field definitions live in MergeFieldConfig (Models/FieldSchema.cs).
+            return Ok(MergeFieldConfig.Schema);
         }
 
         /// <summary>

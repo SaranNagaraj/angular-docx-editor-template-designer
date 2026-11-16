@@ -49,13 +49,13 @@ namespace EJ2APIServices.Services
     public static class DocumentMergeService
     {
         /// <summary>Parent region/table name. «Case:CaseNumber» resolves against this table.</summary>
-        public const string CaseRegionName = "Case";
+        public const string CaseRegionName = MergeFieldConfig.ParentRegion;
 
         /// <summary>Child region/table name (repeating party region).</summary>
-        public const string PartiesRegionName = "Parties";
+        public const string PartiesRegionName = MergeFieldConfig.ChildRegion;
 
         /// <summary>Relation key between Case and Parties.</summary>
-        private const string RelationKey = "CaseId";
+        private const string RelationKey = MergeFieldConfig.RelationKey;
 
         /// <summary>
         /// Converts the SFDT template serialized by the Angular Document Editor into a
@@ -165,6 +165,7 @@ namespace EJ2APIServices.Services
         ///   NOTICE OF HEARING (title)
         ///   Case Number: «CaseNumber» / Case Caption: «CaseCaption»   (case fields)
         ///   Notice Date: «NoticeDate»                                  (NOT in API data -> prompts)
+        ///   Hearing held in person: «HearingInPerson»                  (NOT in API data -> prompts)
         ///   TO ALL PARTIES OF RECORD ...
         ///   «BeginGroup:Parties»
         ///     Dear «FirstName» «LastName»,
@@ -210,6 +211,9 @@ namespace EJ2APIServices.Services
             var noticeDate = section.AddParagraph();
             noticeDate.AppendText("Notice Date: ");
             noticeDate.AppendField("NoticeDate", FieldType.FieldMergeField);
+            var inPerson = section.AddParagraph();
+            inPerson.AppendText("Hearing held in person: ");
+            inPerson.AppendField("HearingInPerson", FieldType.FieldMergeField);
             section.AddParagraph().AppendText("---------------------------------------------------------------------");
 
             // ---- Repeating party region (Requirement 4 + 5) ----
@@ -270,30 +274,52 @@ namespace EJ2APIServices.Services
         /// </summary>
         public static DataSet BuildNestedDataSet(List<CaseData> cases)
         {
+            // Columns come from MergeFieldConfig (fields flagged FromData); values are read
+            // from CaseData / PartyData by property name. A null value stays null, so the
+            // field is treated as missing and the user is prompted.
+            var caseFields = MergeFieldConfig.DataFields(CaseRegionName);
+            var partyFields = MergeFieldConfig.DataFields(PartiesRegionName);
+
             var ds = new DataSet();
 
             var caseTable = new DataTable(CaseRegionName);
-            caseTable.Columns.Add("CaseId");
-            caseTable.Columns.Add("CaseNumber");
-            caseTable.Columns.Add("CaseCaption");
+            caseTable.Columns.Add(RelationKey);
+            foreach (var f in caseFields) { caseTable.Columns.Add(f); }
             ds.Tables.Add(caseTable);
 
             var partyTable = new DataTable(PartiesRegionName);
             partyTable.Columns.Add(RelationKey);
-            partyTable.Columns.Add("FirstName");
-            partyTable.Columns.Add("LastName");
-            partyTable.Columns.Add("Address");
+            foreach (var f in partyFields) { partyTable.Columns.Add(f); }
             ds.Tables.Add(partyTable);
 
             foreach (var c in cases)
             {
-                caseTable.Rows.Add(c.CaseId.ToString(), c.CaseNumber ?? "", c.CaseCaption ?? "");
+                caseTable.Rows.Add(RowValues(c.CaseId.ToString(), c, caseFields));
                 foreach (var p in c.Parties ?? Enumerable.Empty<PartyData>())
                 {
-                    partyTable.Rows.Add(c.CaseId.ToString(), p.FirstName ?? "", p.LastName ?? "", p.Address);
+                    partyTable.Rows.Add(RowValues(c.CaseId.ToString(), p, partyFields));
                 }
             }
             return ds;
+        }
+
+        /// <summary>Reads a public property of the data object by name (null when absent).</summary>
+        private static object PropertyValue(object source, string name)
+        {
+            return source?.GetType()
+                .GetProperty(name, System.Reflection.BindingFlags.Public
+                                 | System.Reflection.BindingFlags.Instance
+                                 | System.Reflection.BindingFlags.IgnoreCase)
+                ?.GetValue(source);
+        }
+
+        /// <summary>One data row: optional relation key first, then one value per field.</summary>
+        private static object[] RowValues(string relationKey, object source, List<string> fields)
+        {
+            var values = new List<object>();
+            if (relationKey != null) { values.Add(relationKey); }
+            foreach (var f in fields) { values.Add(PropertyValue(source, f)); }
+            return values.ToArray();
         }
 
         /// <summary>
@@ -316,15 +342,14 @@ namespace EJ2APIServices.Services
         /// </summary>
         public static DataTable BuildPartyGroupTable(List<CaseData> cases)
         {
+            var fields = MergeFieldConfig.DataFields(PartiesRegionName);
             var dt = new DataTable(PartiesRegionName); // table name == region name
-            dt.Columns.Add("FirstName");
-            dt.Columns.Add("LastName");
-            dt.Columns.Add("Address");
+            foreach (var f in fields) { dt.Columns.Add(f); }
             foreach (var c in cases)
             {
                 foreach (var p in c.Parties ?? Enumerable.Empty<PartyData>())
                 {
-                    dt.Rows.Add(p.FirstName ?? "", p.LastName ?? "", p.Address ?? "");
+                    dt.Rows.Add(RowValues(null, p, fields));
                 }
             }
             return dt;
@@ -545,7 +570,7 @@ namespace EJ2APIServices.Services
 
                 if (supplied != null && !string.IsNullOrEmpty(supplied.Value))
                 {
-                    args.FieldValue = supplied.Value;
+                    args.FieldValue = FormatSuppliedValue(args.FieldName, supplied.Value);
                     args.ClearField = false;
                 }
                 else
@@ -612,6 +637,23 @@ namespace EJ2APIServices.Services
 
             destination.ImportContent(source, ImportOptions.UseDestinationStyles);
             Console.WriteLine($"[merge] combined supporting document: {label}");
+        }
+
+        /// <summary>
+        /// Converts a supplied value to the text written into the document. Dates and
+        /// numbers are written as received (plain strings); boolean fields (per
+        /// MergeFieldConfig) are written as "Yes" / "No".
+        /// </summary>
+        private static string FormatSuppliedValue(string fieldName, string value)
+        {
+            var entry = MergeFieldConfig.Find(fieldName);
+            if (entry != null && entry.Type == FieldTypes.Boolean)
+            {
+                return string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase)
+                    ? MergeFieldConfig.YesText
+                    : MergeFieldConfig.NoText;
+            }
+            return value;
         }
 
         /// <summary>

@@ -9,12 +9,17 @@ export interface FieldSchemaEntry {
     type: FieldType;
     label?: string;
     description?: string;
+    /** number fields: whole numbers only. */
+    integer?: boolean;
+    /** number fields: optional bounds. */
+    min?: number | null;
+    max?: number | null;
 }
 
-/** Merge field schema: group name -> field name -> typed entry. */
+/** Merge field schema from GET /api/schema: region (group) name -> field name -> typed entry.
+ * No region or field names are hardcoded on the client. */
 export interface FieldSchema {
-    Case?: { [fieldName: string]: FieldSchemaEntry };
-    Parties?: { [fieldName: string]: FieldSchemaEntry };
+    [groupName: string]: { [fieldName: string]: FieldSchemaEntry };
 }
 
 export interface CaseInfo {

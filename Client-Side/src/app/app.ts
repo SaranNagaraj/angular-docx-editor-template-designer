@@ -26,6 +26,10 @@ interface MissingFieldInput {
     label: string;
     type: FieldType;
     value: string;
+    /** number rules from the schema */
+    integer?: boolean;
+    min?: number | null;
+    max?: number | null;
 }
 
 interface SchemaGroupView {
@@ -47,11 +51,14 @@ interface FieldMeta {
     type: FieldType;
     label?: string;
     groupName: string;
+    integer?: boolean;
+    min?: number | null;
+    max?: number | null;
 }
 
 /**
  * Builds a human-readable label for a missing merge field. Case-level fields
- * (groupName === 'Case' or empty, rowIndex === 0) are labeled simply as
+ * (empty group or rowIndex === 0, which is how the server tags them) are labeled as
  * "FieldName (case CaseNumber)". Row-level fields inside a repeating group
  * add "for item N in group GroupName".
  */
@@ -60,7 +67,6 @@ function buildMissingFieldLabel(
     fieldMeta: Record<string, FieldMeta>
 ): string {
     const isCaseLevel = !m.groupName
-        || m.groupName === 'Case'
         || m.rowIndex === 0;
     const friendly = fieldMeta[m.fieldName]?.label || m.fieldName;
     return isCaseLevel
@@ -71,14 +77,23 @@ function buildMissingFieldLabel(
 /**
  * Validates one typed value. Returns null when valid, otherwise an error message.
  * - date:    non-empty + parseable by Date
- * - number:  non-empty + strict decimal form (optional sign, digits, optional
+ * - number:  (schema may require whole numbers and min/max) non-empty + strict decimal form (optional sign, digits, optional
  *            fractional digits). Rejects '1e5', 'Infinity', '0x11', blank input.
  * - boolean: always valid (a toggle always has a value)
  * - string:  any value is valid
  */
 const NUMBER_PATTERN = /^-?\d+(\.\d+)?$/;
 
-function validateTypedValue(type: FieldType, value: string): string | null {
+const INTEGER_PATTERN = /^-?\d+$/;
+
+/** Number rules read from the schema (integer / min / max). */
+interface NumberRules {
+    integer?: boolean;
+    min?: number | null;
+    max?: number | null;
+}
+
+function validateTypedValue(type: FieldType, value: string, rules?: NumberRules): string | null {
     if (type === 'boolean') {
         return null;
     }
@@ -87,8 +102,20 @@ function validateTypedValue(type: FieldType, value: string): string | null {
         return type === 'string' ? null : 'Value is required.';
     }
     if (type === 'number') {
-        if (!NUMBER_PATTERN.test(value.trim())) {
+        const text = value.trim();
+        if (rules?.integer) {
+            if (!INTEGER_PATTERN.test(text)) {
+                return 'Enter a whole number (digits only, e.g. 10).';
+            }
+        } else if (!NUMBER_PATTERN.test(text)) {
             return 'Enter a valid number (digits only, e.g. 250 or 19.99).';
+        }
+        const n = Number(text);
+        if (rules?.min != null && n < rules.min) {
+            return `Value must be at least ${rules.min}.`;
+        }
+        if (rules?.max != null && n > rules.max) {
+            return `Value must be at most ${rules.max}.`;
         }
     } else if (type === 'date') {
         const d = new Date(value);
@@ -341,20 +368,20 @@ function coerceTypedValue(type: FieldType, value: string): string {
                                 <!-- type=text + inputmode=decimal: the browser reports
                                      '' for invalid native number input, which would
                                      lose the raw text and show the wrong message. -->
-                                <input type="text" inputmode="decimal" class="poc-input"
+                                <input type="text" class="poc-input"
+                                    [attr.inputmode]="item.integer ? 'numeric' : 'decimal'"
                                     [(ngModel)]="item.value"
                                     name="missingValue{{ $index }}"
-                                    placeholder="e.g. 250 or 19.99"
+                                    [placeholder]="item.integer ? 'Whole number, e.g. 10' : 'e.g. 250 or 19.99'"
                                     [class.poc-input-invalid]="invalidFor(item)">
                             }
                             @case ('boolean') {
-                                <label class="poc-toggle-row">
-                                    <input type="checkbox" role="switch"
+                                <label class="poc-checkbox-row">
+                                    <input type="checkbox"
                                         [checked]="item.value === 'true'"
                                         (change)="onBooleanChange(item, $event)"
                                         name="missingValue{{ $index }}">
-                                    <span class="poc-toggle-track" aria-hidden="true"></span>
-                                    <span class="poc-toggle-label">{{ item.value === 'true' ? 'Yes' : 'No' }}</span>
+                                    <span>{{ item.value === 'true' ? 'Yes' : 'No' }}</span>
                                 </label>
                             }
                             @default {
@@ -540,7 +567,10 @@ export class App implements AfterViewInit, OnDestroy {
                 meta[fieldName] = {
                     type: group[fieldName].type,
                     label: group[fieldName].label,
-                    groupName
+                    groupName,
+                    integer: group[fieldName].integer,
+                    min: group[fieldName].min,
+                    max: group[fieldName].max
                 };
             }
         }
@@ -1031,7 +1061,10 @@ export class App implements AfterViewInit, OnDestroy {
                 fieldName: m.fieldName,
                 type,
                 label: buildMissingFieldLabel(m, this.fieldMeta),
-                value: this.defaultValueFor(type)
+                value: this.defaultValueFor(type),
+                integer: meta?.integer,
+                min: meta?.min,
+                max: meta?.max
             };
         }));
         this.showMissingDialog.set(true);
@@ -1056,7 +1089,7 @@ export class App implements AfterViewInit, OnDestroy {
 
     /** Validation helper used by the template. */
     public validationError(item: MissingFieldInput): string | null {
-        return validateTypedValue(item.type, item.value);
+        return validateTypedValue(item.type, item.value, item);
     }
 
     public invalidFor(item: MissingFieldInput): boolean {
