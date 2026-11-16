@@ -286,8 +286,10 @@ namespace EJ2APIServices.Services
         }
 
         /// <summary>
-        /// Runs the mail merge over the selected cases (one merged document) and returns
-        /// either the missing fields to prompt for, or the merged document as SFDT.
+        /// Runs the mail merge over the selected cases for the main template and every
+        /// selected supporting document, then combines them into one consolidated output
+        /// document. Returns either the missing fields to prompt for, or the merged
+        /// document as SFDT.
         ///
         /// Region detection decides the merge strategy before anything is executed:
         ///
@@ -302,28 +304,98 @@ namespace EJ2APIServices.Services
         ///   relational MailMerge.ExecuteNestedGroup(dataSet, commands) with parent-child
         ///   resolution (Pattern 2 / Requirement 5) - unchanged.
         ///
+        /// The same strategy is applied to every selected supporting document so each
+        /// one's merge fields (CaseNumber, JudgeName, NoticeDate, ...) are filled using
+        /// the same case data. After every document has been merged, the supporting
+        /// documents are appended to the main document (one page break between each),
+        /// producing one consolidated output.
+        ///
         /// Exact code path:
-        ///   1. Region discovery:  doc.MailMerge.GetMergeGroupNames() / GetMergeFieldNames()
-        ///      (logged so manually inserted regions can be verified).
+        ///   1. Region discovery (per document):  doc.MailMerge.GetMergeGroupNames() /
+        ///      GetMergeFieldNames() (logged so manually inserted regions can be verified).
         ///   2. Data mapping:     BuildPartyGroupTable() for the standard path;
         ///                        BuildNestedDataSet()/BuildNestedCommands() for the nested path.
         ///   3. Mail merge:       ExecuteGroup(...) or ExecuteNestedGroup(...) per scenario.
         ///   4. Missing detection: BeforeClearField fires for every field DocIO could not
         ///      fill. MergeField events track which case row is current (nested path) so
         ///      each missing field is tagged with its CaseId/CaseNumber. AdditionalMergeData
-        ///      values are injected through the same event in both paths.
-        ///   5. Append supporting documents (if any): DocIO.AppendDocument is called for
-        ///      each path in the order the caller supplied them, producing ONE document.
+        ///      values are injected through the same event. Missing fields are accumulated
+        ///      across the main template and every supporting document - one prompt covers
+        ///      all of them.
+        ///   5. Append supporting documents: DocIO.AppendDocument is called for each
+        ///      merged supporting document in the order the caller supplied them, with
+        ///      SectionBreakCode.NewPage between each, producing ONE consolidated document.
         /// </summary>
         public static MergeOutcome Merge(
-            WordDocument template,
+            WordDocument mainTemplate,
             List<CaseData> cases,
             List<AdditionalMergeValue> additionalData,
-            List<string> appendedDocumentPaths = null)
+            List<string> supportingDocumentPaths = null)
         {
-            var doc = template.Clone();
+            // Phase 1: merge the main template (cloned, so the caller's WordDocument is not mutated).
+            var main = mainTemplate.Clone();
             var outcome = new MergeOutcome();
 
+            var mainResult = RunMergeOnDocument(main, cases, additionalData, outcome, "main");
+            if (!mainResult) { return outcome; } // missing fields: prompt the user, no document
+
+            // Phase 2: merge each supporting document (with the same case data + supplied
+            // additional values), then append to the main merged document.
+            if (supportingDocumentPaths != null && supportingDocumentPaths.Count > 0)
+            {
+                for (int i = 0; i < supportingDocumentPaths.Count; i++)
+                {
+                    var path = supportingDocumentPaths[i];
+                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    {
+                        Console.WriteLine($"[merge] skipping missing supporting document: {path}");
+                        continue;
+                    }
+
+                    // Clone the loaded supporting doc so MailMerge state on the main
+                    // document isn't disturbed. We open a fresh WordDocument for each.
+                    using (var src = new WordDocument(path, FormatType.Docx))
+                    {
+                        var supportingClone = src.Clone();
+
+                        // Try the merge on this supporting document. If it reports missing
+                        // fields, abort the whole run and let the UI prompt.
+                        var ok = RunMergeOnDocument(supportingClone, cases, additionalData, outcome,
+                            $"supporting[{i + 1}/{supportingDocumentPaths.Count}]: {Path.GetFileName(path)}");
+                        if (!ok)
+                        {
+                            main.Close();
+                            return outcome;
+                        }
+
+                        AppendSupportingDocument(main, supportingClone);
+                        supportingClone.Close();
+                    }
+                }
+            }
+
+            outcome.MergedSfdt = ToSfdt(main);
+            outcome.DocumentName = "Merged-Notice-of-Hearing.docx";
+            main.Close();
+            return outcome;
+        }
+
+        /// <summary>
+        /// Runs the mail merge on one WordDocument using the detected region strategy.
+        /// Returns true if the merge completed (any missing fields were resolved or the
+        /// document had no missing fields); false if the merge produced missing fields
+        /// that still need user input.
+        ///
+        /// Missing fields are accumulated into the shared outcome so a single prompt
+        /// covers the main template AND every selected supporting document.
+        /// </summary>
+        private static bool RunMergeOnDocument(
+            WordDocument doc,
+            List<CaseData> cases,
+            List<AdditionalMergeValue> additionalData,
+            MergeOutcome outcome,
+            string label)
+        {
             // ---- Region detection (decides the merge strategy) ----
             var detectedGroups = doc.MailMerge.GetMergeGroupNames() ?? new string[0];
             var detectedFields = doc.MailMerge.GetMergeFieldNames() ?? new string[0];
@@ -331,9 +403,9 @@ namespace EJ2APIServices.Services
                 string.Equals(g, CaseRegionName, StringComparison.OrdinalIgnoreCase));
             bool hasPartiesRegion = detectedGroups.Any(g =>
                 string.Equals(g, PartiesRegionName, StringComparison.OrdinalIgnoreCase));
-            Console.WriteLine($"[merge] detected groups: [{string.Join(", ", detectedGroups)}]");
-            Console.WriteLine($"[merge] detected fields: [{string.Join(", ", detectedFields)}]");
-            Console.WriteLine($"[merge] strategy: {(hasCaseRegion && hasPartiesRegion ? "nested (ExecuteNestedGroup)" : "standard (ExecuteGroup)")}");
+            Console.WriteLine($"[merge][{label}] detected groups: [{string.Join(", ", detectedGroups)}]");
+            Console.WriteLine($"[merge][{label}] detected fields: [{string.Join(", ", detectedFields)}]");
+            Console.WriteLine($"[merge][{label}] strategy: {(hasCaseRegion && hasPartiesRegion ? "nested (ExecuteNestedGroup)" : "standard (ExecuteGroup)")}");
 
             // Parent index (1-based) of the case row currently being merged. Tracked from
             // MergeField events of the parent group so missing child fields can be tagged
@@ -345,6 +417,11 @@ namespace EJ2APIServices.Services
             var caseNumbers = cases.Select(c => c.CaseNumber).ToList();
 
             doc.MailMerge.ClearFields = false; // keep unmerged fields until we know what is missing
+
+            // Snapshot the missing-field count so we only inspect fields discovered
+            // while merging THIS document (caller may pass an outcome that already has
+            // missing fields accumulated from a previous run we want to ignore).
+            int missingBefore = outcome.MissingFields.Count;
 
             doc.MailMerge.MergeField += (sender, args) =>
             {
@@ -362,8 +439,6 @@ namespace EJ2APIServices.Services
 
             doc.MailMerge.BeforeClearField += (sender, args) =>
             {
-                // DocIO reports a 0-based row inside the group; the UI contract is 1-based.
-                // Case-level fields (GroupName "Case") get RowIndex 0.
                 string groupName = args.GroupName ?? "";
                 int rowIndex = args.RowIndex < 0 ? 0 : args.RowIndex + 1;
                 if (string.Equals(groupName, CaseRegionName, StringComparison.OrdinalIgnoreCase))
@@ -371,8 +446,6 @@ namespace EJ2APIServices.Services
                     rowIndex = 0; // case-level field: no row differentiation
                 }
 
-                // Which case is this field in? Child fields inherit the tracked case;
-                // case-level fields are the current case row.
                 int caseIdForField = currentCaseId;
                 string caseNumberForField = currentCaseNumber;
 
@@ -380,7 +453,6 @@ namespace EJ2APIServices.Services
 
                 if (supplied != null && !string.IsNullOrEmpty(supplied.Value))
                 {
-                    // Requirement 1, second request: re-execute the field with the entered value.
                     args.FieldValue = supplied.Value;
                     args.ClearField = false;
                 }
@@ -403,78 +475,78 @@ namespace EJ2APIServices.Services
             // ---- The actual merge: strategy chosen from the detected regions ----
             if (hasCaseRegion && hasPartiesRegion)
             {
-                // Scenario B: nested relational merge (Requirement 5), unchanged.
                 doc.MailMerge.ExecuteNestedGroup(BuildNestedDataSet(cases), BuildNestedCommands());
             }
             else if (hasPartiesRegion)
             {
-                // Scenario A: standard repeating region (Pattern 1). No parent Case region.
                 doc.MailMerge.ExecuteGroup(BuildPartyGroupTable(cases));
-                // Case-level fields outside the region are filled per selection: when
-                // several cases are selected in the standard scenario there is no
-                // per-case repetition, so the first selected case supplies them.
-                var first = cases.FirstOrDefault();
-                doc.MailMerge.Execute(
-                    new[] { "CaseNumber", "CaseCaption" },
-                    new[] { first?.CaseNumber ?? "", first?.CaseCaption ?? "" });
+                ExecuteCaseLevelFields(doc, cases, detectedFields);
             }
             else
             {
-                // No regions at all: fill the plain case fields only.
-                var first = cases.FirstOrDefault();
-                doc.MailMerge.Execute(
-                    new[] { "CaseNumber", "CaseCaption" },
-                    new[] { first?.CaseNumber ?? "", first?.CaseCaption ?? "" });
+                ExecuteCaseLevelFields(doc, cases, detectedFields);
             }
 
-            if (outcome.MissingFields.Count > 0)
+            // New missing fields discovered in this document?
+            if (outcome.MissingFields.Count > missingBefore)
             {
-                doc.Close();
-                return outcome; // no document: the UI must prompt first
+                return false;
             }
 
-            // ---- Append supporting documents (cover page, addendums, signature page, ...) ----
-            if (appendedDocumentPaths != null && appendedDocumentPaths.Count > 0)
-            {
-                AppendSupportingDocuments(doc, appendedDocumentPaths);
-            }
-
-            outcome.MergedSfdt = ToSfdt(doc);
-            outcome.DocumentName = "Merged-Notice-of-Hearing.docx";
-            doc.Close();
-            return outcome;
+            return true;
         }
 
         /// <summary>
-        /// Appends each supporting document to the end of the merged document in the
-        /// supplied order. ImportOptions are set so styles do not collide with the main
-        /// document. Each appended document starts on a new page (SectionBreakCode.NewPage).
+        /// Fills case-level merge fields (CaseNumber, CaseCaption) that sit OUTSIDE any
+        /// region. Only fields actually present in the document are filled, so the same
+        /// code works for the main template AND for supporting documents that may or may
+        /// not contain those fields. With multiple selected cases and no parent Case
+        /// region there is no per-case repetition; the first selected case supplies the
+        /// values for these top-level fields.
         /// </summary>
-        private static void AppendSupportingDocuments(WordDocument doc, List<string> paths)
+        private static void ExecuteCaseLevelFields(
+            WordDocument doc,
+            List<CaseData> cases,
+            string[] detectedFields)
         {
-            for (int i = 0; i < paths.Count; i++)
+            if (detectedFields == null || detectedFields.Length == 0)
             {
-                var path = paths[i];
-                if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
-                {
-                    Console.WriteLine($"[merge] skipping missing supporting document: {path}");
-                    continue;
-                }
-
-                using (var src = new WordDocument(path, FormatType.Docx))
-                {
-                    var options = new ImportOptions
-                    {
-                        // KeepStyles avoids style-name collisions when appending
-                        // multiple documents that may share style names.
-                        KeepStyles = true,
-                        MergeStyles = false,
-                        CopyStyles = false
-                    };
-                    doc.AppendDocument(src, options, SectionBreakCode.NewPage);
-                    Console.WriteLine($"[merge] appended supporting document [{i + 1}/{paths.Count}]: {path}");
-                }
+                return;
             }
+
+            var present = new HashSet<string>(
+                detectedFields.Select(f => f ?? ""),
+                StringComparer.OrdinalIgnoreCase);
+
+            var first = cases.FirstOrDefault();
+            string firstCaseNumber = first?.CaseNumber ?? "";
+            string firstCaseCaption = first?.CaseCaption ?? "";
+
+            var names = new List<string>();
+            var values = new List<string>();
+            if (present.Contains("CaseNumber")) { names.Add("CaseNumber"); values.Add(firstCaseNumber); }
+            if (present.Contains("CaseCaption")) { names.Add("CaseCaption"); values.Add(firstCaseCaption); }
+
+            if (names.Count > 0)
+            {
+                doc.MailMerge.Execute(names.ToArray(), values.ToArray());
+            }
+        }
+
+        /// <summary>
+        /// Appends an already-merged supporting document to the end of the main merged
+        /// document. Each appended document starts on a new page (SectionBreakCode.NewPage).
+        /// ImportOptions keep styles from colliding between documents.
+        /// </summary>
+        private static void AppendSupportingDocument(WordDocument main, WordDocument supporting)
+        {
+            var options = new ImportOptions
+            {
+                KeepStyles = true,
+                MergeStyles = false,
+                CopyStyles = false
+            };
+            main.AppendDocument(supporting, options, SectionBreakCode.NewPage);
         }
 
         /// <summary>

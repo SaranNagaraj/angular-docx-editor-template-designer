@@ -32,18 +32,21 @@ interface SchemaGroupView {
 
 /**
  *
- * Startup: schema loads and the bundled sample template opens in the editor, so the
- * user can immediately search, select cases and generate (no blank editor).
+ * Startup: schema loads and the default main template ("Notice of Hearing" from
+ * wwwroot/Templates) opens in the editor, so the user can immediately search, select
+ * cases and generate (no blank editor).
  *
- * Layout (unchanged):
+ * Layout:
  * - Left:  Merge Fields (click-to-insert, driven by GET /api/schema)
  * - Center: Document Editor in Ribbon mode with a custom "Mail Merge" tab
- * - Right: Search Cases + Generate Documents (business data selection)
+ * - Right: Template loader + Search Cases + Documents to Merge + Generate
  *
  * Generate flow: the current editor document is serialized as SFDT, sent to
- * POST /api/generate, DocIO executes the relational nested mail merge for every
- * selected case into ONE document, and the merged SFDT is opened directly in the
- * editor (no download).
+ * POST /api/generate with the selected case ids and selected supporting-document ids.
+ * DocIO executes the relational nested mail merge for every selected case against the
+ * main template AND every selected supporting document, then appends the merged
+ * supporting documents to the main document to produce a single consolidated output.
+ * The merged SFDT is opened directly in the editor (no download).
  *
  * State uses signals because the app runs zoneless (Angular 21 default): promise
  * callbacks do not trigger change detection by themselves.
@@ -138,7 +141,7 @@ interface SchemaGroupView {
                         {{ loadingTemplate() ? 'Loading...' : 'Load' }}
                     </button>
                 </div>
-                <p class="poc-muted">Load an existing template into the editor (or keep the bundled sample).</p>
+                <p class="poc-muted">Replace the main template in the editor. The "Notice of Hearing" loads by default.</p>
 
                 <div class="poc-divider"></div>
 
@@ -178,7 +181,7 @@ interface SchemaGroupView {
                 <div class="poc-divider"></div>
 
                 <h2>Documents to Merge</h2>
-                <p class="poc-muted">Select supporting documents to append after the mail merge.</p>
+                <p class="poc-muted">Select supporting documents. Their merge fields are filled with the case data and combined with the main template into a single document.</p>
                 <div class="poc-template-list">
                     @for (t of templates(); track t.id) {
                         <label class="poc-template-item">
@@ -266,12 +269,14 @@ export class App implements AfterViewInit, OnDestroy {
             this.statusMessage.set('Could not load the merge field schema from /api/schema.');
         });
 
-        // ...then the bundled sample template into the editor (no blank start).
-        this.api.getSampleTemplate().then(sfdt => {
+        // ...then the default main template ("Notice of Hearing") from the templates folder
+        // into the editor (no blank start). The server falls back to the bundled sample
+        // template if no DOCX is present in the configured folder yet.
+        this.api.getDefaultTemplate().then(sfdt => {
             if (this.disposed) { return; }
             this.openInEditor(sfdt);
         }).catch(() => {
-            this.statusMessage.set('Could not load the sample template from /api/template.');
+            this.statusMessage.set('Could not load the default template from /api/template.');
         });
 
         // ...and the supporting documents list (drives the "Documents to Merge" panel
@@ -451,7 +456,7 @@ export class App implements AfterViewInit, OnDestroy {
             const appendedCount = this.selectedAppendedIds().size;
             const caseCount = this.selectedIds().size;
             const suffix = appendedCount > 0
-                ? `, then appended ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
+                ? ` and merged ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
                 : '';
             this.statusMessage.set(`Merged ${caseCount} case(s) into one document${suffix}.`);
         }).catch(() => {

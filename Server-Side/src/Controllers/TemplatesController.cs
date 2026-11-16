@@ -30,7 +30,7 @@ namespace EJ2APIServices.Controllers
 
         private string GetFolder()
         {
-            return SupportingDocumentRepository.EnsureFolder(
+            return SupportingDocumentRepository.GetFolder(
                 _env.ContentRootPath,
                 _config["TemplatesFolder"]);
         }
@@ -39,7 +39,7 @@ namespace EJ2APIServices.Controllers
         public IActionResult List()
         {
             var folder = GetFolder();
-            var items = SupportingDocumentRepository.List(folder);
+            var items = SupportingDocumentRepository.ListSupporting(folder);
             return Ok(items);
         }
 
@@ -47,7 +47,7 @@ namespace EJ2APIServices.Controllers
         public IActionResult Get(string id)
         {
             var folder = GetFolder();
-            var path = SupportingDocumentRepository.GetFilePath(folder, id);
+            var path = SupportingDocumentRepository.GetSupportingFilePath(folder, id);
             if (path == null)
             {
                 return NotFound(new { message = $"Template '{id}' was not found." });

@@ -79,8 +79,10 @@ export class CaseApiService {
         return firstValueFrom(this.http.get<FieldSchema>('/api/schema'));
     }
 
-    /** Bundled sample template as SFDT, opened in the editor on application start. */
-    getSampleTemplate(): Promise<string> {
+    /** Default main template as SFDT (the Notice of Hearing from the templates folder),
+     * opened in the editor on application start. Falls back to the bundled sample
+     * template server-side if the configured file is not present. */
+    getDefaultTemplate(): Promise<string> {
         return firstValueFrom(this.http.get<{ sfdt: string }>('/api/template'))
             .then(r => r.sfdt);
     }

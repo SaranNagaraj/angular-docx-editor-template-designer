@@ -64,16 +64,40 @@ namespace EJ2APIServices.Controllers
         }
 
         /// <summary>
-        /// The bundled sample Notice of Hearing template serialized as SFDT.
-        /// The Angular editor opens this on application start so the app never starts
-        /// blank and the sample already demonstrates case fields, the repeating party
-        /// region and parent fields inside the region.
+        /// The default main template ("Notice of Hearing") loaded from the configured
+        /// templates folder, serialized as SFDT. The Angular editor opens this on
+        /// application start so the app never starts blank.
+        ///
+        /// If the configured templates folder does not contain a "Notice of Hearing.docx"
+        /// (e.g. before the user has dropped the template pack into wwwroot/Templates),
+        /// this endpoint falls back to the bundled DocIO-generated sample template so the
+        /// app still works for a developer who has not yet added the customer-supplied files.
         /// </summary>
         [HttpGet]
         [Route("/api/template")]
         public IActionResult Template()
         {
-            string sfdt = DocumentMergeService.BuildSampleTemplateSfdt();
+            var folder = SupportingDocumentRepository.GetFolder(
+                _env.ContentRootPath,
+                _config["TemplatesFolder"]);
+            var mainPath = SupportingDocumentRepository.GetMainTemplatePath(folder);
+
+            string sfdt;
+            if (mainPath != null)
+            {
+                try
+                {
+                    sfdt = DocumentMergeService.LoadDocxAsSfdt(mainPath);
+                }
+                catch (Exception)
+                {
+                    sfdt = DocumentMergeService.BuildSampleTemplateSfdt();
+                }
+            }
+            else
+            {
+                sfdt = DocumentMergeService.BuildSampleTemplateSfdt();
+            }
             return Ok(new { sfdt });
         }
 
@@ -156,19 +180,19 @@ namespace EJ2APIServices.Controllers
 
             // Resolve supporting document ids -> file paths. Skip unknown ids so a stale
             // selection from a previous session does not break the request.
-            var appendedPaths = new List<string>();
+            var supportingPaths = new List<string>();
             if (request.AppendedDocumentIds != null && request.AppendedDocumentIds.Count > 0)
             {
-                var folder = SupportingDocumentRepository.EnsureFolder(
+                var folder = SupportingDocumentRepository.GetFolder(
                     _env.ContentRootPath,
                     _config["TemplatesFolder"]);
 
                 foreach (var id in request.AppendedDocumentIds)
                 {
-                    var path = SupportingDocumentRepository.GetFilePath(folder, id);
+                    var path = SupportingDocumentRepository.GetSupportingFilePath(folder, id);
                     if (path != null)
                     {
-                        appendedPaths.Add(path);
+                        supportingPaths.Add(path);
                     }
                 }
             }
@@ -176,7 +200,7 @@ namespace EJ2APIServices.Controllers
             try
             {
                 var additional = request.AdditionalMergeData ?? new List<AdditionalMergeValue>();
-                var outcome = DocumentMergeService.Merge(template, cases, additional, appendedPaths);
+                var outcome = DocumentMergeService.Merge(template, cases, additional, supportingPaths);
 
                 if (outcome.MissingFields.Count > 0)
                 {
