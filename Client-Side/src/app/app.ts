@@ -240,6 +240,7 @@ function coerceTypedValue(type: FieldType, value: string): string {
                     style="display:block"
                     [enableToolbar]="!previewMode()"
                     [toolbarMode]="'Ribbon'"
+                    (created)="onEditorCreated()"
                     serviceUrl="/api/documenteditor/">
                 </ejs-documenteditorcontainer>
             </section>
@@ -469,14 +470,10 @@ export class App implements AfterViewInit, OnDestroy {
     }
 
     ngAfterViewInit(): void {
-        // Track edits so "Save Document" becomes available as soon as the user
-        // changes the document. The editor raises contentChange for every edit.
-        // contentChange is an EJ2 Observable whose subscribe method is declared
-        // optional, hence the optional call.
-        const contentChange = this.container?.documentEditor?.contentChange;
-        if (contentChange) {
-            contentChange.subscribe?.(() => this.markDirty());
-        }
+        // NOTE: the inner documentEditor is not created yet when this lifecycle hook
+        // runs - the EJ2 container builds it asynchronously and fires the `created`
+        // event when ready (see onEditorCreated, where the contentChange
+        // subscription is attached).
 
         // Startup: schema first (independent of any search)...
         this.api.getSchema().then(schema => {
@@ -495,10 +492,11 @@ export class App implements AfterViewInit, OnDestroy {
             if (this.disposed) { return; }
             this.openInEditor(result.sfdt);
             // The editor now holds the main template; Save Document writes to the
-            // reported file name (creating it if it does not exist yet).
+            // reported file name (creating it if it does not exist yet). Older
+            // backends do not send fileName - fall back to the constant default.
             this.editorHoldsDefaultTemplate = true;
             this.editorHoldsTemplate.set(true);
-            this.currentDocumentId = result.fileName;
+            this.currentDocumentId = result.fileName || this.mainTemplateId || 'Notice of Hearing.docx';
             this.markClean();
         }).catch(() => {
             this.statusMessage.set('Could not load the default template from /api/template.');
@@ -510,6 +508,11 @@ export class App implements AfterViewInit, OnDestroy {
             if (this.disposed) { return; }
             this.templates.set(items);
             this.mainTemplateId = items.find(t => t.isMainTemplate)?.id ?? '';
+            // Backfill the save target if the default template loaded before the list
+            // and the server did not report a file name.
+            if (this.editorHoldsDefaultTemplate && !this.currentDocumentId) {
+                this.currentDocumentId = this.mainTemplateId || 'Notice of Hearing.docx';
+            }
             // Default the dropdown to the first template so the UI is never empty.
             if (items.length > 0 && !this.selectedTemplateId) {
                 this.selectedTemplateId = items[0].id;
@@ -521,6 +524,22 @@ export class App implements AfterViewInit, OnDestroy {
 
     ngOnDestroy(): void {
         this.disposed = true;
+    }
+
+    /**
+     * The EJ2 container fires `created` once the inner DocumentEditor exists. This is
+     * the earliest reliable point to subscribe to contentChange - subscribing in
+     * ngAfterViewInit silently no-ops because documentEditor is still undefined
+     * there, which left the Save Document button permanently disabled.
+     */
+    public onEditorCreated(): void {
+        const contentChange = this.container?.documentEditor?.contentChange;
+        if (contentChange) {
+            contentChange.subscribe?.(() => this.markDirty());
+        }
+        // The editor just became available; make sure its read-only state matches
+        // the current preview mode (it defaults to read-only).
+        this.applyEditorReadOnly(this.previewMode());
     }
 
     private buildSchemaGroups(schema: FieldSchema): SchemaGroupView[] {
@@ -751,7 +770,7 @@ export class App implements AfterViewInit, OnDestroy {
             this.openInEditor(result.sfdt);
             // The editor now holds the default template again - it is savable, not a
             // merged output.
-            this.currentDocumentId = result.fileName;
+            this.currentDocumentId = result.fileName || this.mainTemplateId || 'Notice of Hearing.docx';
             this.editorHoldsDefaultTemplate = true;
             this.editorHoldsTemplate.set(true);
             this.statusMessage.set('Reset to the default template.');
