@@ -38,6 +38,28 @@ namespace EJ2APIServices.Models
     }
 
     /// <summary>
+    /// Response of POST /api/pdf/convert. Carries the converted document twice so the
+    /// client has both representations available:
+    ///   - Sfdt:        for the editor (lossy round-trip).
+    ///   - DocxBase64:  the converted DOCX bytes base64-encoded, for layout-faithful
+    ///                  download (preserves tables, headers, bold/italic, etc.).
+    /// </summary>
+    public class ConvertPdfResponse
+    {
+        [JsonPropertyName("sfdt")]
+        public string Sfdt { get; set; }
+
+        [JsonPropertyName("docxBase64")]
+        public string DocxBase64 { get; set; }
+
+        [JsonPropertyName("fileName")]
+        public string FileName { get; set; }
+
+        [JsonPropertyName("fileSizeBytes")]
+        public long FileSizeBytes { get; set; }
+    }
+
+    /// <summary>
     /// Body of POST /api/templates/{id}/save: the editor's current document
     /// serialized as SFDT. The server converts it back to DOCX and writes it over
     /// the file in the templates folder.

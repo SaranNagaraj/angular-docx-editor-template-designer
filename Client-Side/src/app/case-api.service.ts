@@ -72,6 +72,14 @@ export interface SaveTemplateResult {
     path: string;
 }
 
+/** Result of a PDF -> Word conversion. The DOCX is base64-encoded. */
+export interface ConvertedPdf {
+    sfdt: string;
+    docxBase64: string;
+    fileName: string;
+    fileSizeBytes: number;
+}
+
 export interface GenerateRequest {
     caseIds: number[];
     additionalMergeData?: AdditionalMergeValue[];
@@ -138,15 +146,16 @@ export class CaseApiService {
     }
 
     /**
-     * Converts an uploaded PDF to a Word document on the server and returns the
-     * result as SFDT so the Document Editor can open it directly.
+     * Converts an uploaded PDF to a Word document on the server. The server returns
+     * both the converted SFDT (for the editor) and the DOCX bytes base64-encoded (for
+     * layout-faithful download - the SFDT round-trip is lossy).
+     *
      * Server side uses Syncfusion's DataExtractor.ExtractDataAsWordDocument.
      */
-    convertPdfToWord(file: File): Promise<string> {
+    convertPdfToWord(file: File): Promise<ConvertedPdf> {
         const form = new FormData();
         form.append('file', file, file.name);
-        return firstValueFrom(this.http.post<{ sfdt: string }>('/api/pdf/convert', form))
-            .then(r => r.sfdt);
+        return firstValueFrom(this.http.post<ConvertedPdf>('/api/pdf/convert', form));
     }
 
     /**

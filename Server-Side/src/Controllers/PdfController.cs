@@ -12,7 +12,9 @@ namespace EJ2APIServices.Controllers
 {
     /// <summary>
     /// PDF -> Word conversion API:
-    /// POST /api/pdf/convert   (multipart upload; returns the converted document as SFDT)
+    /// POST /api/pdf/convert   (multipart upload; returns the converted document as SFDT
+    ///                           for the editor AND as base64 DOCX for high-fidelity
+    ///                           download)
     ///
     /// The conversion follows the canonical pattern from
     /// https://help.syncfusion.com/document-processing/data-extraction/net/conversions/pdf-to-word#convert-pdf-or-image-to-word-document
@@ -22,7 +24,10 @@ namespace EJ2APIServices.Controllers
     ///   document.Save(saveStream, FormatType.Docx);
     ///
     /// The converted DOCX is then re-serialised as SFDT so the Angular Document
-    /// Editor can open it directly, without the user ever handling a DOCX file.
+    /// Editor can open it directly. The SFDT round-trip is lossy (it cannot carry
+    /// arbitrary text-frame positioning, run-level styling or floating shapes), so
+    /// the response also carries the original DOCX bytes base64-encoded - the
+    /// client offers a "Download DOCX" link that preserves the full PDF layout.
     /// </summary>
     [Route("api/[controller]")]
     public class PdfController : Controller
@@ -54,20 +59,36 @@ namespace EJ2APIServices.Controllers
                     // Extract data as WordDocument.
                     using (var wordDoc = extractor.ExtractDataAsWordDocument(pdfStream))
                     {
-                        // Save the extracted Word data into an output stream.
+                        // Save the extracted Word data into an output stream. This
+                        // DOCX preserves as much of the original PDF layout as
+                        // Syncfusion's SmartDataExtractor can reconstruct (tables,
+                        // lists, headers, bold/italic at the paragraph level, ...).
+                        byte[] docxBytes;
                         using (var saveStream = new MemoryStream())
                         {
                             wordDoc.Save(saveStream, FormatType.Docx);
-                            saveStream.Position = 0;
-
-                            // Re-open the converted DOCX and serialise it as SFDT so the
-                            // Angular Document Editor can open it directly.
-                            using (var converted = new WordDocument(saveStream, FormatType.Docx))
-                            {
-                                var sfdt = DocumentMergeService.ToSfdt(converted);
-                                return Ok(new SupportingDocumentSfdtResponse { Sfdt = sfdt });
-                            }
+                            docxBytes = saveStream.ToArray();
                         }
+
+                        // Re-open the converted DOCX and serialise it as SFDT so the
+                        // Angular Document Editor can open it directly. NOTE: the
+                        // SFDT round-trip is lossy compared with the DOCX above;
+                        // for layout-faithful work the user should download the
+                        // DOCX instead.
+                        string sfdt;
+                        using (var converted = new WordDocument(new MemoryStream(docxBytes), FormatType.Docx))
+                        {
+                            sfdt = DocumentMergeService.ToSfdt(converted);
+                        }
+
+                        var displayName = StripDocxExtension(SafeFileName(file.FileName)) + ".docx";
+                        return Ok(new ConvertPdfResponse
+                        {
+                            Sfdt = sfdt,
+                            DocxBase64 = Convert.ToBase64String(docxBytes),
+                            FileName = displayName,
+                            FileSizeBytes = docxBytes.Length
+                        });
                     }
                 }
             }
@@ -75,6 +96,25 @@ namespace EJ2APIServices.Controllers
             {
                 return StatusCode(500, new { message = $"Could not convert the PDF: {ex.Message}" });
             }
+        }
+
+        private static string SafeFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "converted";
+            var invalid = Path.GetInvalidFileNameChars();
+            var sb = new System.Text.StringBuilder(name.Length);
+            foreach (var ch in name)
+            {
+                sb.Append(System.Array.IndexOf(invalid, ch) >= 0 ? '_' : ch);
+            }
+            return sb.ToString().Trim();
+        }
+
+        private static string StripDocxExtension(string fileName)
+        {
+            return fileName.EndsWith(".docx", StringComparison.OrdinalIgnoreCase)
+                ? fileName.Substring(0, fileName.Length - ".docx".Length)
+                : fileName;
         }
 
         /// <summary>
