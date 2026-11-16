@@ -6,8 +6,10 @@ using EJ2APIServices.Data;
 using EJ2APIServices.Models;
 using EJ2APIServices.Services;
 using Microsoft.AspNetCore.Cors;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Syncfusion.DocIO.DLS;
 
 namespace EJ2APIServices.Controllers
@@ -25,6 +27,15 @@ namespace EJ2APIServices.Controllers
     [Route("api/[controller]")]
     public class CasesController : Controller
     {
+        private readonly IWebHostEnvironment _env;
+        private readonly IConfiguration _config;
+
+        public CasesController(IWebHostEnvironment env, IConfiguration config)
+        {
+            _env = env;
+            _config = config;
+        }
+
         /// <summary>
         /// Merge field schema for the explorer and the Insert Merge Field dialog.
         ///
@@ -105,6 +116,9 @@ namespace EJ2APIServices.Controllers
         ///
         /// All selected cases are merged into one document: one notice block per case,
         /// one party block per party (ExecuteNestedGroup).
+        ///
+        /// If appendedDocumentIds are supplied, each is loaded from the configured
+        /// templates folder and appended to the merged document in the order received.
         /// </summary>
         [HttpPost]
         [Route("/api/generate")]
@@ -140,10 +154,29 @@ namespace EJ2APIServices.Controllers
                 template = DocumentMergeService.BuildSampleTemplate();
             }
 
+            // Resolve supporting document ids -> file paths. Skip unknown ids so a stale
+            // selection from a previous session does not break the request.
+            var appendedPaths = new List<string>();
+            if (request.AppendedDocumentIds != null && request.AppendedDocumentIds.Count > 0)
+            {
+                var folder = SupportingDocumentRepository.EnsureFolder(
+                    _env.ContentRootPath,
+                    _config["TemplatesFolder"]);
+
+                foreach (var id in request.AppendedDocumentIds)
+                {
+                    var path = SupportingDocumentRepository.GetFilePath(folder, id);
+                    if (path != null)
+                    {
+                        appendedPaths.Add(path);
+                    }
+                }
+            }
+
             try
             {
                 var additional = request.AdditionalMergeData ?? new List<AdditionalMergeValue>();
-                var outcome = DocumentMergeService.Merge(template, cases, additional);
+                var outcome = DocumentMergeService.Merge(template, cases, additional, appendedPaths);
 
                 if (outcome.MissingFields.Count > 0)
                 {
@@ -155,7 +188,8 @@ namespace EJ2APIServices.Controllers
                     });
                 }
 
-                // One merged document for every selected case, opened in the editor.
+                // One merged document for every selected case + appended supporting documents,
+                // opened in the editor.
                 return Ok(new GenerateMergedResponse
                 {
                     MergedSfdt = outcome.MergedSfdt,

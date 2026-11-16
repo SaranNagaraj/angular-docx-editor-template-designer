@@ -81,6 +81,8 @@ namespace EJ2APIServices.Models
         public List<AdditionalMergeValue> AdditionalMergeData { get; set; }
         /// <summary>Serialized template (SFDT) from the Angular Document Editor. Falls back to the bundled sample template.</summary>
         public string TemplateSfdt { get; set; }
+        /// <summary>Optional ordered list of supporting document ids to append after the merge.</summary>
+        public List<string> AppendedDocumentIds { get; set; }
     }
 
     /// <summary>

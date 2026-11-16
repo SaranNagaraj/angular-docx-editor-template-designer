@@ -42,10 +42,21 @@ export interface AdditionalMergeValue {
     value: string;
 }
 
+/**
+ * A supporting document available in the configured templates folder.
+ * Returned by GET /api/templates.
+ */
+export interface SupportingDocument {
+    id: string;
+    displayName: string;
+    order: number;
+}
+
 export interface GenerateRequest {
     caseIds: number[];
     additionalMergeData?: AdditionalMergeValue[];
     templateSfdt?: string;
+    appendedDocumentIds?: string[];
 }
 
 export type GenerateResult =
@@ -82,6 +93,17 @@ export class CaseApiService {
 
     getCase(caseId: number): Promise<CaseData> {
         return firstValueFrom(this.http.get<CaseData>(`/api/cases/${caseId}`));
+    }
+
+    /** Lists the supporting documents available for appending after the merge. */
+    listTemplates(): Promise<SupportingDocument[]> {
+        return firstValueFrom(this.http.get<SupportingDocument[]>('/api/templates'));
+    }
+
+    /** Loads a supporting document as SFDT so the editor can open it. */
+    getTemplate(id: string): Promise<string> {
+        return firstValueFrom(this.http.get<{ sfdt: string }>(`/api/templates/${encodeURIComponent(id)}`))
+            .then(r => r.sfdt);
     }
 
     /**

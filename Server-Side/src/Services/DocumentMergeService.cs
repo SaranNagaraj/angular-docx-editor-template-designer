@@ -91,6 +91,26 @@ namespace EJ2APIServices.Services
         }
 
         /// <summary>
+        /// Loads a DOCX file from disk and returns its SFDT representation so the editor
+        /// can open it directly.
+        /// </summary>
+        public static string LoadDocxAsSfdt(string docxPath)
+        {
+            using (var doc = new WordDocument(docxPath, FormatType.Docx))
+            {
+                return ToSfdt(doc);
+            }
+        }
+
+        /// <summary>
+        /// Loads a DOCX file from disk into a DocIO WordDocument ready to be appended.
+        /// </summary>
+        public static WordDocument LoadDocx(string docxPath)
+        {
+            return new WordDocument(docxPath, FormatType.Docx);
+        }
+
+        /// <summary>
         /// Builds the bundled sample Notice of Hearing template. Used on application start
         /// so the editor never opens blank, and as the fallback when no SFDT is sent.
         ///
@@ -292,11 +312,14 @@ namespace EJ2APIServices.Services
         ///      fill. MergeField events track which case row is current (nested path) so
         ///      each missing field is tagged with its CaseId/CaseNumber. AdditionalMergeData
         ///      values are injected through the same event in both paths.
+        ///   5. Append supporting documents (if any): DocIO.AppendDocument is called for
+        ///      each path in the order the caller supplied them, producing ONE document.
         /// </summary>
         public static MergeOutcome Merge(
             WordDocument template,
             List<CaseData> cases,
-            List<AdditionalMergeValue> additionalData)
+            List<AdditionalMergeValue> additionalData,
+            List<string> appendedDocumentPaths = null)
         {
             var doc = template.Clone();
             var outcome = new MergeOutcome();
@@ -410,10 +433,48 @@ namespace EJ2APIServices.Services
                 return outcome; // no document: the UI must prompt first
             }
 
+            // ---- Append supporting documents (cover page, addendums, signature page, ...) ----
+            if (appendedDocumentPaths != null && appendedDocumentPaths.Count > 0)
+            {
+                AppendSupportingDocuments(doc, appendedDocumentPaths);
+            }
+
             outcome.MergedSfdt = ToSfdt(doc);
             outcome.DocumentName = "Merged-Notice-of-Hearing.docx";
             doc.Close();
             return outcome;
+        }
+
+        /// <summary>
+        /// Appends each supporting document to the end of the merged document in the
+        /// supplied order. ImportOptions are set so styles do not collide with the main
+        /// document. Each appended document starts on a new page (SectionBreakCode.NewPage).
+        /// </summary>
+        private static void AppendSupportingDocuments(WordDocument doc, List<string> paths)
+        {
+            for (int i = 0; i < paths.Count; i++)
+            {
+                var path = paths[i];
+                if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+                {
+                    Console.WriteLine($"[merge] skipping missing supporting document: {path}");
+                    continue;
+                }
+
+                using (var src = new WordDocument(path, FormatType.Docx))
+                {
+                    var options = new ImportOptions
+                    {
+                        // KeepStyles avoids style-name collisions when appending
+                        // multiple documents that may share style names.
+                        KeepStyles = true,
+                        MergeStyles = false,
+                        CopyStyles = false
+                    };
+                    doc.AppendDocument(src, options, SectionBreakCode.NewPage);
+                    Console.WriteLine($"[merge] appended supporting document [{i + 1}/{paths.Count}]: {path}");
+                }
+            }
         }
 
         /// <summary>

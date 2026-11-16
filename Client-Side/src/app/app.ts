@@ -11,7 +11,8 @@ import {
     FieldSchema,
     CaseInfo,
     MissingField,
-    AdditionalMergeValue
+    AdditionalMergeValue,
+    SupportingDocument
 } from './case-api.service';
 
 interface MissingFieldInput {
@@ -122,8 +123,25 @@ interface SchemaGroupView {
                 </ejs-documenteditorcontainer>
             </section>
 
-            <!-- RIGHT PANEL: Search Cases + Generate -->
+            <!-- RIGHT PANEL: Template + Search Cases + Documents to Merge + Generate -->
             <aside class="poc-panel poc-cases">
+                <h2>Template</h2>
+                <div class="poc-search-row">
+                    <select class="poc-input" [(ngModel)]="selectedTemplateId" name="templateSelect"
+                        [disabled]="loadingTemplate() || templates().length === 0">
+                        @for (t of templates(); track t.id) {
+                            <option [value]="t.id">{{ t.displayName }}</option>
+                        }
+                    </select>
+                    <button type="button" class="poc-btn" (click)="loadSelectedTemplate()"
+                        [disabled]="!selectedTemplateId || loadingTemplate()">
+                        {{ loadingTemplate() ? 'Loading...' : 'Load' }}
+                    </button>
+                </div>
+                <p class="poc-muted">Load an existing template into the editor (or keep the bundled sample).</p>
+
+                <div class="poc-divider"></div>
+
                 <h2>Search Cases</h2>
                 <div class="poc-search-row">
                     <input type="text" [(ngModel)]="keyword" placeholder="e.g. Smith"
@@ -156,6 +174,26 @@ interface SchemaGroupView {
                 <p class="poc-muted" *ngIf="searched() && results().length === 0">No cases match the keyword.</p>
 
                 <p class="poc-selected">Selected Cases : {{ selectedIds().size }}</p>
+
+                <div class="poc-divider"></div>
+
+                <h2>Documents to Merge</h2>
+                <p class="poc-muted">Select supporting documents to append after the mail merge.</p>
+                <div class="poc-template-list">
+                    @for (t of templates(); track t.id) {
+                        <label class="poc-template-item">
+                            <input type="checkbox"
+                                [checked]="isAppendedSelected(t.id)"
+                                (change)="toggleAppendedSelection(t.id)">
+                            <span>{{ t.displayName }}</span>
+                        </label>
+                    }
+                    <p class="poc-muted" *ngIf="templates().length === 0">No supporting documents available.</p>
+                </div>
+                <p class="poc-selected">Selected Documents : {{ selectedAppendedIds().size }}</p>
+
+                <div class="poc-divider"></div>
+
                 <button type="button" class="poc-btn poc-btn-primary" (click)="generate()"
                     [disabled]="selectedIds().size === 0 || generating()">
                     {{ generating() ? 'Generating...' : 'Generate Document' }}
@@ -200,6 +238,14 @@ export class App implements AfterViewInit, OnDestroy {
     public generating = signal(false);
     public statusMessage = signal('');
 
+    /** Supporting documents (templates) loaded from GET /api/templates on startup. */
+    public templates = signal<SupportingDocument[]>([]);
+    public selectedTemplateId = '';
+    public loadingTemplate = signal(false);
+
+    /** Selected supporting documents to append after the merge. */
+    public selectedAppendedIds = signal<Set<string>>(new Set<string>());
+
     public showMissingDialog = signal(false);
     public missingInputs = signal<MissingFieldInput[]>([]);
 
@@ -226,6 +272,19 @@ export class App implements AfterViewInit, OnDestroy {
             this.openInEditor(sfdt);
         }).catch(() => {
             this.statusMessage.set('Could not load the sample template from /api/template.');
+        });
+
+        // ...and the supporting documents list (drives the "Documents to Merge" panel
+        // and the template picker dropdown).
+        this.api.listTemplates().then(items => {
+            if (this.disposed) { return; }
+            this.templates.set(items);
+            // Default the dropdown to the first template so the UI is never empty.
+            if (items.length > 0 && !this.selectedTemplateId) {
+                this.selectedTemplateId = items[0].id;
+            }
+        }).catch(() => {
+            this.statusMessage.set('Could not list supporting documents from /api/templates.');
         });
     }
 
@@ -328,6 +387,37 @@ export class App implements AfterViewInit, OnDestroy {
         this.selectedIds.set(next); // new Set instance so the signal fires
     }
 
+    // ---------------- Template loader + supporting document selection ----------------
+
+    /**
+     * Replaces the editor's current document with the chosen supporting document.
+     * Used by the "Template" dropdown at the top of the right panel.
+     */
+    public loadSelectedTemplate(): void {
+        const id = this.selectedTemplateId;
+        if (!id) { return; }
+        this.loadingTemplate.set(true);
+        this.api.getTemplate(id).then(sfdt => {
+            if (this.disposed) { return; }
+            this.openInEditor(sfdt);
+            this.statusMessage.set(`Loaded template '${id}'.`);
+        }).catch(() => {
+            this.statusMessage.set(`Could not load template '${id}'.`);
+        }).finally(() => {
+            this.loadingTemplate.set(false);
+        });
+    }
+
+    public isAppendedSelected(id: string): boolean {
+        return this.selectedAppendedIds().has(id);
+    }
+
+    public toggleAppendedSelection(id: string): void {
+        const next = new Set(this.selectedAppendedIds());
+        if (next.has(id)) { next.delete(id); } else { next.add(id); }
+        this.selectedAppendedIds.set(next);
+    }
+
     // ---------------- Generate ----------------
 
     /**
@@ -347,7 +437,8 @@ export class App implements AfterViewInit, OnDestroy {
         const request = {
             caseIds: Array.from(this.selectedIds()),
             additionalMergeData,
-            templateSfdt
+            templateSfdt,
+            appendedDocumentIds: Array.from(this.selectedAppendedIds())
         };
 
         this.api.generate(request).then(result => {
@@ -357,7 +448,12 @@ export class App implements AfterViewInit, OnDestroy {
                 return;
             }
             this.openInEditor(result.mergedSfdt);
-            this.statusMessage.set(`Merged ${this.selectedIds().size} case(s) into one document.`);
+            const appendedCount = this.selectedAppendedIds().size;
+            const caseCount = this.selectedIds().size;
+            const suffix = appendedCount > 0
+                ? `, then appended ${appendedCount} supporting document${appendedCount === 1 ? '' : 's'}`
+                : '';
+            this.statusMessage.set(`Merged ${caseCount} case(s) into one document${suffix}.`);
         }).catch(() => {
             this.generating.set(false);
             this.statusMessage.set('Generation failed. Check the service log.');

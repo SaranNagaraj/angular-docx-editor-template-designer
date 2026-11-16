@@ -177,6 +177,27 @@
     font-size: 0.8125rem;
 }
 
+/* Documents to Merge list */
+.poc-template-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 6px;
+}
+
+.poc-template-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.875rem;
+    color: #111827;
+    cursor: pointer;
+}
+
+.poc-template-item input[type="checkbox"] {
+    margin: 0;
+}
+
 /* Missing field dialog */
 .poc-dialog-backdrop {
     position: fixed;
